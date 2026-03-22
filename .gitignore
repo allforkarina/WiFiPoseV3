@@ -1,0 +1,63 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+env/
+venv/
+.venv/
+venv.bak/
+
+# Python packaging
+build/
+dist/
+*.egg-info/
+
+# Data caches and large artifacts
+data/aoa_cache/
+data/*.h5
+logs/
+checkpoints/
+*.ckpt
+*.pth
+*.pt
+
+# Raw data (optional - uncomment if you do not want raw .mat under version control)
+# data/raw/
+
+# IDEs and editors
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Temp / caches
+*.h5.tmp
+.pytest_cache/
+.mypy_cache/
+.cache/
+temp/
+tmp/
+
+# Coverage
+.coverage
+htmlcov/
+
+# Environment files
+.env
+.env.*
+
+# Logs
+*.log
+
+# OneDrive/Office temp files
+~$*
