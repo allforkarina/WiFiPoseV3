@@ -47,6 +47,31 @@ class AOASampleDataset(Dataset):
                 for fi in range(num_frames):
                     self.index.append((action, sample, fi))
 
+    @staticmethod
+    def _normalize_aoa(aoa: np.ndarray) -> np.ndarray:
+        aoa = np.asarray(aoa, dtype=np.float32)
+        aoa = np.nan_to_num(aoa, nan=0.0, posinf=0.0, neginf=0.0)
+        aoa = np.maximum(aoa, 0.0)
+        aoa = np.log1p(aoa)
+        p99 = float(np.percentile(aoa, 99.0))
+        if p99 > 0:
+            aoa = np.clip(aoa / p99, 0.0, 1.0)
+        max_abs = float(np.max(np.abs(aoa)))
+        if max_abs > 0:
+            aoa = aoa / max_abs
+        return aoa.astype(np.float32)
+
+    @staticmethod
+    def _normalize_pose(label: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        pose = np.asarray(label, dtype=np.float32).reshape(17, 2)
+        center = pose.mean(axis=0, keepdims=True)
+        centered = pose - center
+        scale = float(np.sqrt(np.mean(np.sum(centered ** 2, axis=1))))
+        if scale < 1e-6:
+            scale = 1.0
+        normalized = centered / scale
+        return normalized.astype(np.float32), center.astype(np.float32), np.array([scale], dtype=np.float32)
+
     def __len__(self):
         return len(self.index)
 
@@ -87,8 +112,8 @@ class AOASampleDataset(Dataset):
 
         label = np.load(label_path).astype(np.float32)
 
-        X = aoa[np.newaxis, :]
-        Y = label.reshape(17, 2)
+        X = self._normalize_aoa(aoa)[np.newaxis, :]
+        Y, pose_center, pose_scale = self._normalize_pose(label)
 
         if self.transform:
             X, Y = self.transform(X, Y)
@@ -100,6 +125,8 @@ class AOASampleDataset(Dataset):
             'frame_idx': frame_idx,
             'aoa_h5': str(h5_path),
             'label_path': str(label_path),
+            'pose_center': pose_center,
+            'pose_scale': pose_scale,
         }
 
         return torch.from_numpy(X).float(), torch.from_numpy(Y).float(), meta
