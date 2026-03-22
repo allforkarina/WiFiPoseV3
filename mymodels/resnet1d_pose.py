@@ -1,0 +1,89 @@
+from __future__ import annotations
+
+import torch
+from torch import nn, Tensor
+
+
+class ResidualBlock1D(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, stride: int = 1, dropout: float = 0.1) -> None:
+        super().__init__()
+        self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size=5, stride=stride, padding=2, bias=False)
+        self.bn1 = nn.BatchNorm1d(out_channels)
+        self.act = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm1d(out_channels)
+        self.dropout = nn.Dropout(dropout)
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv1d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm1d(out_channels),
+            )
+        else:
+            self.shortcut = nn.Identity()
+
+    def forward(self, x: Tensor) -> Tensor:
+        identity = self.shortcut(x)
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.act(out)
+        out = self.dropout(out)
+        out = self.conv2(out)
+        out = self.bn2(out)
+        out = out + identity
+        return self.act(out)
+
+
+class ResNet1DPose(nn.Module):
+    """Residual 1D CNN for AoA -> normalized 2D pose."""
+
+    def __init__(
+        self,
+        input_channels: int = 1,
+        input_length: int = 181,
+        hidden_dim: int = 256,
+        num_joints: int = 17,
+        out_dim: int = 2,
+        dropout: float = 0.2,
+    ) -> None:
+        super().__init__()
+        self.num_joints = num_joints
+        self.out_dim = out_dim
+
+        base_dim = max(64, hidden_dim // 4)
+        mid_dim = max(128, hidden_dim // 2)
+
+        self.stem = nn.Sequential(
+            nn.Conv1d(input_channels, base_dim, kernel_size=7, padding=3, bias=False),
+            nn.BatchNorm1d(base_dim),
+            nn.ReLU(inplace=True),
+        )
+        self.backbone = nn.Sequential(
+            ResidualBlock1D(base_dim, base_dim, stride=1, dropout=dropout * 0.5),
+            ResidualBlock1D(base_dim, mid_dim, stride=2, dropout=dropout * 0.5),
+            ResidualBlock1D(mid_dim, hidden_dim, stride=2, dropout=dropout),
+            ResidualBlock1D(hidden_dim, hidden_dim, stride=1, dropout=dropout),
+        )
+        self.pool = nn.AdaptiveAvgPool1d(1)
+        self.head = nn.Sequential(
+            nn.Flatten(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, num_joints * out_dim),
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        if x.dim() == 2:
+            x = x.unsqueeze(1)
+        feats = self.stem(x)
+        feats = self.backbone(feats)
+        out = self.pool(feats)
+        out = self.head(out)
+        return out.view(out.size(0), self.num_joints, self.out_dim)
+
+
+if __name__ == "__main__":
+    model = ResNet1DPose()
+    y = model(torch.randn(2, 1, 181))
+    print(y.shape)

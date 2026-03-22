@@ -16,7 +16,7 @@ import yaml
 
 from dataloader.aoa_dataset import AOASampleDataset, sample_to_env
 from dataloader.stratified_sampler import StratifiedBatchSampler
-from mymodels import ConvBaseline
+from mymodels import ConvBaseline, ResNet1DPose
 from utils.set_seed import set_seed
 
 
@@ -29,8 +29,6 @@ def load_config(cfg_path: str | Path) -> Dict[str, Any]:
 
 
 class TrainLogger:
-	"""Simple logger that writes to console and optional file."""
-
 	def __init__(self, log_path: Path | None, verbose: bool) -> None:
 		self.log_path = log_path
 		self.verbose = verbose
@@ -46,16 +44,12 @@ class TrainLogger:
 
 
 def nMPJPE(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
-	"""Compute Normalized MPJPE (scale-only Procrustes) in 2D."""
-
 	batch_size = pred.shape[0]
 	pred_flat = pred.view(batch_size, -1)
 	gt_flat = gt.view(batch_size, -1)
-
 	num = (pred_flat * gt_flat).sum(dim=1)
 	den = (pred_flat * pred_flat).sum(dim=1).clamp(min=1e-8)
 	scale = (num / den).view(batch_size, 1, 1)
-
 	aligned = scale * pred
 	err = torch.linalg.norm(aligned - gt, dim=-1)
 	return err.mean()
@@ -90,16 +84,23 @@ def extract_meta_field(meta: Any, key: str) -> list[str]:
 	return []
 
 
-def split_indices_by_env(ds: AOASampleDataset, val_env: str) -> tuple[list[int], list[int]]:
+def split_indices_by_envs(
+	ds: AOASampleDataset,
+	val_env: str,
+	test_env: str,
+) -> tuple[list[int], list[int], list[int]]:
 	train_indices: list[int] = []
 	val_indices: list[int] = []
+	test_indices: list[int] = []
 	for idx, (_, sample, _) in enumerate(ds.index):
 		env_id = sample_to_env(sample)
 		if env_id == val_env:
 			val_indices.append(idx)
+		elif env_id == test_env:
+			test_indices.append(idx)
 		else:
 			train_indices.append(idx)
-	return train_indices, val_indices
+	return train_indices, val_indices, test_indices
 
 
 def build_subset_loader(
@@ -126,7 +127,8 @@ def build_dataloaders(
 	aoa_root: Path,
 	labels_root: Path,
 	val_env: str,
-) -> tuple[DataLoader, DataLoader, dict[str, Any]]:
+	test_env: str,
+) -> tuple[DataLoader, DataLoader, DataLoader, dict[str, Any]]:
 	ds = AOASampleDataset(aoa_root=aoa_root, labels_root=labels_root)
 	if len(ds) == 0:
 		raise RuntimeError(f"Dataset is empty. aoa_root={aoa_root} labels_root={labels_root}")
@@ -135,51 +137,47 @@ def build_dataloaders(
 	num_workers = int(cfg.get("dataset", {}).get("num_workers", 0))
 	pin_memory = bool(cfg.get("dataset", {}).get("pin_memory", False)) and device.type == "cuda"
 
-	train_indices, val_indices = split_indices_by_env(ds, val_env=val_env)
+	train_indices, val_indices, test_indices = split_indices_by_envs(ds, val_env=val_env, test_env=test_env)
 	if not train_indices:
-		raise RuntimeError(f"Training split is empty for val_env={val_env}")
+		raise RuntimeError(f"Training split is empty for val_env={val_env} test_env={test_env}")
 	if not val_indices:
 		raise RuntimeError(f"Validation split is empty for val_env={val_env}")
+	if not test_indices:
+		raise RuntimeError(f"Test split is empty for test_env={test_env}")
 
-	train_loader = build_subset_loader(
-		ds=ds,
-		indices=train_indices,
-		batch_size=batch_size,
-		num_workers=num_workers,
-		pin_memory=pin_memory,
-		shuffle=True,
-		use_stratified=use_stratified,
-	)
-	val_loader = build_subset_loader(
-		ds=ds,
-		indices=val_indices,
-		batch_size=batch_size,
-		num_workers=num_workers,
-		pin_memory=pin_memory,
-		shuffle=False,
-		use_stratified=False,
-	)
+	train_loader = build_subset_loader(ds, train_indices, batch_size, num_workers, pin_memory, True, use_stratified)
+	val_loader = build_subset_loader(ds, val_indices, batch_size, num_workers, pin_memory, False, False)
+	test_loader = build_subset_loader(ds, test_indices, batch_size, num_workers, pin_memory, False, False)
 
 	stats = {
 		"dataset_size": len(ds),
 		"train_size": len(train_indices),
 		"val_size": len(val_indices),
+		"test_size": len(test_indices),
 		"batch_size": batch_size,
 		"val_env": val_env,
+		"test_env": test_env,
 	}
-	return train_loader, val_loader, stats
+	return train_loader, val_loader, test_loader, stats
 
 
-def build_model(cfg: Dict[str, Any], device: torch.device) -> nn.Module:
+def build_model(cfg: Dict[str, Any], device: torch.device, model_name_override: str | None) -> nn.Module:
 	mcfg = cfg.get("model", {})
-	model = ConvBaseline(
-		input_channels=mcfg.get("input_channels", 1),
-		input_length=mcfg.get("input_length", 181),
-		hidden_dim=mcfg.get("hidden_dim", 256),
-		num_joints=mcfg.get("output_joints", 17),
-		out_dim=mcfg.get("output_dim", 2),
-		dropout=mcfg.get("dropout", 0.2),
-	)
+	model_name = (model_name_override or mcfg.get("name", "conv1d_baseline")).lower()
+	common_kwargs = {
+		"input_channels": mcfg.get("input_channels", 1),
+		"input_length": mcfg.get("input_length", 181),
+		"hidden_dim": mcfg.get("hidden_dim", 256),
+		"num_joints": mcfg.get("output_joints", 17),
+		"out_dim": mcfg.get("output_dim", 2),
+		"dropout": mcfg.get("dropout", 0.2),
+	}
+	if model_name == "conv1d_baseline":
+		model = ConvBaseline(**common_kwargs)
+	elif model_name == "resnet1d":
+		model = ResNet1DPose(**common_kwargs)
+	else:
+		raise ValueError(f"Unsupported model name: {model_name}")
 	return model.to(device)
 
 
@@ -233,28 +231,20 @@ def train_one_epoch(
 	envs_seen: set[str] = set()
 
 	total_steps = min(max_steps, len(loader)) if max_steps > 0 else len(loader)
-
 	for step, (x, y, meta) in enumerate(loader):
 		x = x.to(device)
 		y = y.to(device)
-
 		optimizer.zero_grad()
 		pred = model(x)
 		loss = criterion(pred, y)
-
 		if not torch.isfinite(loss):
-			logger.log(
-				f"[warn] epoch={epoch} step={step+1} non-finite loss: {loss.item()}",
-				always=True,
-			)
+			logger.log(f"[warn] epoch={epoch} step={step+1} non-finite loss: {loss.item()}", always=True)
 			has_nan_loss = True
 			break
-
 		loss.backward()
 		grad_norm = _compute_grad_norm(model)
 		if not math.isfinite(grad_norm):
 			has_nan_grad = True
-
 		logger.log(
 			f"[train] epoch={epoch}/{num_epochs} step={step+1}/{total_steps} loss={loss.item():.6f} grad_norm={grad_norm:.3f}",
 			always=((step + 1) % log_interval == 0 or step == 0),
@@ -265,7 +255,6 @@ def train_one_epoch(
 		running_loss += loss.item()
 		actions_seen.update(extract_meta_field(meta, "action"))
 		envs_seen.update(extract_meta_field(meta, "env_id"))
-
 		if step + 1 >= total_steps:
 			break
 
@@ -324,8 +313,6 @@ def plot_history(path: Path, rows: list[dict[str, Any]], logger: TrainLogger) ->
 	train_loss = [row["train_loss"] for row in rows]
 	val_loss = [row["val_loss"] for row in rows]
 	val_nmpjpe = [row["val_nmpjpe"] for row in rows]
-
-	path.parent.mkdir(parents=True, exist_ok=True)
 	fig, ax1 = plt.subplots(figsize=(9, 5))
 	ax1.plot(epochs, train_loss, label="train_loss", color="tab:blue", linewidth=2)
 	ax1.plot(epochs, val_loss, label="val_loss", color="tab:orange", linewidth=2)
@@ -336,29 +323,53 @@ def plot_history(path: Path, rows: list[dict[str, Any]], logger: TrainLogger) ->
 	ax2 = ax1.twinx()
 	ax2.plot(epochs, val_nmpjpe, label="val_nMPJPE", color="tab:green", linewidth=2)
 	ax2.set_ylabel("nMPJPE")
-
 	lines = ax1.get_lines() + ax2.get_lines()
-	labels = [line.get_label() for line in lines]
-	ax1.legend(lines, labels, loc="upper right")
+	ax1.legend(lines, [line.get_label() for line in lines], loc="upper right")
 	fig.tight_layout()
+	path.parent.mkdir(parents=True, exist_ok=True)
 	fig.savefig(path, dpi=150)
 	plt.close(fig)
 	logger.log(f"[plot] saved path={path}", always=True)
 
 
+def assess_fit(history_rows: list[dict[str, Any]], final_test_nmpjpe: float) -> tuple[str, str]:
+	if not history_rows:
+		return "unknown", "No training history available."
+	best_val = min(row["val_nmpjpe"] for row in history_rows)
+	final_val = history_rows[-1]["val_nmpjpe"]
+	final_train = history_rows[-1]["train_loss"]
+	final_val_loss = history_rows[-1]["val_loss"]
+	gap = final_val_loss - final_train
+	if final_val > best_val * 1.15 and gap > 0.03:
+		return "overfit", (
+			f"Validation nMPJPE rebounded from best {best_val:.4f} to {final_val:.4f}, "
+			f"and val_loss exceeds train_loss by {gap:.4f}."
+		)
+	if final_train > 0.08 and final_val > 0.30:
+		return "underfit", (
+			f"Train loss {final_train:.4f} and val nMPJPE {final_val:.4f} are both still high, "
+			f"so capacity or training budget is likely insufficient."
+		)
+	return "usable", (
+		f"Validation stayed close to the best point ({best_val:.4f}) and final test nMPJPE is {final_test_nmpjpe:.4f}."
+	)
+
+
 def main() -> None:
-	parser = argparse.ArgumentParser(description="Training loop for ConvBaseline with LOEO validation")
+	parser = argparse.ArgumentParser(description="Training loop for AoA pose models with train/val/test splits")
 	parser.add_argument("--config", type=str, default="configs/default.yaml")
-	parser.add_argument("--use_stratified", action="store_true", help="Use stratified batch sampler over (action, env)")
+	parser.add_argument("--use_stratified", action="store_true")
 	parser.add_argument("--max_steps", type=int, default=0, help="Max training steps per epoch (0 = full epoch)")
 	parser.add_argument("--checkpoint", type=str, default="checkpoints/debug_ckpt.pth")
-	parser.add_argument("--resume", action="store_true", help="Resume from checkpoint if available")
-	parser.add_argument("--verbose", action="store_true", help="Print detailed step logs in addition to epoch summaries")
-	parser.add_argument("--log_interval", type=int, default=10, help="Step interval for detailed logging when verbose is enabled")
-	parser.add_argument("--aoa_cache_root", type=str, default=None, help="Override AoA cache root path")
-	parser.add_argument("--labels_root", type=str, default=None, help="Override labels root path")
-	parser.add_argument("--val_env", type=str, default="env4", help="Validation environment id for LOEO split")
-	parser.add_argument("--epochs", type=int, default=None, help="Override number of epochs from config")
+	parser.add_argument("--resume", action="store_true")
+	parser.add_argument("--verbose", action="store_true")
+	parser.add_argument("--log_interval", type=int, default=10)
+	parser.add_argument("--aoa_cache_root", type=str, default=None)
+	parser.add_argument("--labels_root", type=str, default=None)
+	parser.add_argument("--val_env", type=str, default="env3")
+	parser.add_argument("--test_env", type=str, default="env4")
+	parser.add_argument("--epochs", type=int, default=None)
+	parser.add_argument("--model_name", type=str, default=None, help="conv1d_baseline | resnet1d")
 	args = parser.parse_args()
 
 	config_path = Path(args.config)
@@ -377,36 +388,38 @@ def main() -> None:
 	logs_root = resolve_path(cfg.get("logs_root"), PROJECT_ROOT / "logs")
 	log_dir = logs_root / "train"
 	run_name = logging_cfg.get("run_name", "default")
+	model_name = (args.model_name or cfg.get("model", {}).get("name", "conv1d_baseline")).lower()
 	ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-	log_path = log_dir / f"{run_name}_{ts}.log"
-	history_path = log_dir / f"{run_name}_{ts}_history.csv"
-	plot_path = log_dir / f"{run_name}_{ts}_curves.png"
+	log_path = log_dir / f"{run_name}_{model_name}_{ts}.log"
+	history_path = log_dir / f"{run_name}_{model_name}_{ts}_history.csv"
+	plot_path = log_dir / f"{run_name}_{model_name}_{ts}_curves.png"
 	verbose = bool(args.verbose or logging_cfg.get("verbose", False))
 	logger = TrainLogger(log_path=log_path, verbose=verbose)
+
 	logger.log(f"[run] config={args.config} device={device}", always=True)
+	logger.log(f"[run] model={model_name}", always=True)
 	logger.log(f"[run] aoa_cache_root={aoa_root}", always=True)
 	logger.log(f"[run] labels_root={labels_root}", always=True)
-	logger.log(f"[run] val_env={args.val_env}", always=True)
+	logger.log(f"[run] val_env={args.val_env} test_env={args.test_env}", always=True)
 	logger.log(f"[run] logs_file={log_path}", always=True)
 
-	train_loader, val_loader, split_stats = build_dataloaders(
+	train_loader, val_loader, test_loader, split_stats = build_dataloaders(
 		cfg=cfg,
 		use_stratified=args.use_stratified,
 		device=device,
 		aoa_root=aoa_root,
 		labels_root=labels_root,
 		val_env=args.val_env,
+		test_env=args.test_env,
 	)
 	logger.log(
 		"[data] "
-		f"dataset_size={split_stats['dataset_size']} "
-		f"train_size={split_stats['train_size']} "
-		f"val_size={split_stats['val_size']} "
-		f"batch_size={split_stats['batch_size']}",
+		f"dataset_size={split_stats['dataset_size']} train_size={split_stats['train_size']} "
+		f"val_size={split_stats['val_size']} test_size={split_stats['test_size']} batch_size={split_stats['batch_size']}",
 		always=True,
 	)
 
-	model = build_model(cfg, device)
+	model = build_model(cfg, device, args.model_name)
 	criterion = nn.MSELoss()
 	optimizer_name = train_cfg.get("optimizer", "AdamW")
 	lr = float(train_cfg.get("lr", 3e-4))
@@ -427,17 +440,17 @@ def main() -> None:
 	epochs = int(args.epochs if args.epochs is not None else train_cfg.get("epochs", 1))
 	start_time = time.time()
 	prev_elapsed = 0.0
-	best_nm = float("inf")
+	best_val = float("inf")
 	best_epoch = start_epoch
 	history_rows: list[dict[str, Any]] = []
 
 	for epoch in range(start_epoch, epochs):
 		ep = epoch + 1
 		logger.log(
-			f"[epoch_start] epoch={ep}/{epochs} train_size={split_stats['train_size']} val_size={split_stats['val_size']} lr={lr:.3e}",
+			f"[epoch_start] epoch={ep}/{epochs} train_size={split_stats['train_size']} val_size={split_stats['val_size']} "
+			f"test_size={split_stats['test_size']} lr={lr:.3e}",
 			always=True,
 		)
-
 		train_loss, train_stats = train_one_epoch(
 			model=model,
 			loader=train_loader,
@@ -457,7 +470,6 @@ def main() -> None:
 		prev_elapsed = elapsed
 		eta_total = (elapsed / ep) * epochs if ep > 0 else 0.0
 		eta = max(0.0, eta_total - elapsed)
-
 		history_row = {
 			"epoch": ep,
 			"train_loss": float(train_loss),
@@ -472,35 +484,29 @@ def main() -> None:
 
 		logger.log(
 			"[epoch_summary] "
-			f"epoch={ep}/{epochs} "
-			f"time_epoch={ep_time:.1f}s elapsed={elapsed:.1f}s eta={eta:.1f}s "
-			f"lr={lr:.3e} "
-			f"train_loss={train_loss:.6f} "
-			f"val_loss={val_loss:.6f} "
-			f"val_nmpjpe={val_nm:.6f} "
+			f"epoch={ep}/{epochs} time_epoch={ep_time:.1f}s elapsed={elapsed:.1f}s eta={eta:.1f}s "
+			f"train_loss={train_loss:.6f} val_loss={val_loss:.6f} val_nmpjpe={val_nm:.6f} "
 			f"grad_norm_mean={train_stats['grad_norm_mean']:.3f} "
 			f"nan_loss={train_stats['has_nan_loss']} nan_grad={train_stats['has_nan_grad']} "
 			f"actions_covered={train_stats['actions_covered']} envs_covered={train_stats['envs_covered']}",
 			always=True,
 		)
 
-		is_best = val_nm < best_nm
-		if is_best:
-			best_nm = val_nm
+		if val_nm < best_val:
+			best_val = val_nm
 			best_epoch = ep
 			save_checkpoint(ckpt_path, model, optimizer, epoch=ep, cfg=cfg)
-			logger.log(
-				f"[ckpt] saved path={ckpt_path} epoch={ep} best_val_nmpjpe={best_nm:.6f}",
-				always=True,
-			)
+			logger.log(f"[ckpt] saved path={ckpt_path} epoch={ep} best_val_nmpjpe={best_val:.6f}", always=True)
 		else:
-			logger.log(
-				f"[ckpt] no_improve best_epoch={best_epoch} best_val_nmpjpe={best_nm:.6f}",
-				always=True,
-			)
+			logger.log(f"[ckpt] no_improve best_epoch={best_epoch} best_val_nmpjpe={best_val:.6f}", always=True)
 
+	load_checkpoint(ckpt_path, model)
+	test_loss, test_nm = evaluate(model, test_loader, device, criterion)
 	plot_history(plot_path, history_rows, logger)
 	logger.log(f"[history] saved path={history_path}", always=True)
+	assessment, reason = assess_fit(history_rows, test_nm)
+	logger.log(f"[test_summary] best_epoch={best_epoch} test_loss={test_loss:.6f} test_nmpjpe={test_nm:.6f}", always=True)
+	logger.log(f"[assessment] status={assessment} reason={reason}", always=True)
 
 
 if __name__ == "__main__":
