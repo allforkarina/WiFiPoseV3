@@ -7,6 +7,13 @@ import torch
 from torch.utils.data import Dataset
 
 
+# Assumed COCO-style 17-joint order inferred from label geometry.
+LEFT_SHOULDER = 5
+RIGHT_SHOULDER = 6
+LEFT_HIP = 11
+RIGHT_HIP = 12
+
+
 def sample_to_env(sample_id: str) -> str:
     try:
         n = int(sample_id.lstrip('S').lstrip('s'))
@@ -68,11 +75,16 @@ class AOASampleDataset(Dataset):
     @staticmethod
     def _normalize_pose(label: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         pose = np.asarray(label, dtype=np.float32).reshape(17, 2)
-        center = pose.mean(axis=0, keepdims=True)
+        pelvis = 0.5 * (pose[LEFT_HIP] + pose[RIGHT_HIP])
+        shoulder_center = 0.5 * (pose[LEFT_SHOULDER] + pose[RIGHT_SHOULDER])
+        center = pelvis.reshape(1, 2)
         centered = pose - center
-        scale = float(np.sqrt(np.mean(np.sum(centered ** 2, axis=1))))
+
+        torso_vec = shoulder_center - pelvis
+        scale = float(np.linalg.norm(torso_vec))
         if scale < 1e-6:
-            scale = 1.0
+            rms_scale = float(np.sqrt(np.mean(np.sum(centered ** 2, axis=1))))
+            scale = rms_scale if rms_scale >= 1e-6 else 1.0
         normalized = centered / scale
         return normalized.astype(np.float32), center.astype(np.float32), np.array([scale], dtype=np.float32)
 

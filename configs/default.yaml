@@ -76,13 +76,15 @@ train:
 
 # 损失与权重（以“姿态相似”为核心，消除平移与尺度，但考虑旋转）
 loss:
-  normalize_mode: "center_scale"    # center_scale（pelvis center + torso height）
+  normalize_mode: "pelvis_torso"    # pelvis center + torso scale（fallback到RMS）
   lambda_pose: 1.0                  # 主损失：normalized MPJPE (Huber或L2)
   lambda_dir: 1.0                   # 骨向余弦损失
   lambda_angle: 0.5                 # 关节角误差
   lambda_len: 1.0                   # 骨长比例一致性
   lambda_sym: 0.1                   # 对称性
   lambda_reg: 0.01                  # 防塌缩 soft constraint
+  lambda_var: 0.1                   # batch-level variance preservation
+  preserve_ratio: 0.6               # pred std 至少保留 target std 的该比例
   huber_delta: 1.0
 
 # 泛化 / 域适应开关
