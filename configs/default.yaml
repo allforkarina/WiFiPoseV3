@@ -90,7 +90,7 @@ loss:
 
 # 动作辅助监督：不直接参与推理，但强制 backbone 特征区分 A01-A27
 action_aux:
-  enable: true
+  enable: false
   num_actions: 27
   lambda_cls: 0.2
   dropout: 0.1
