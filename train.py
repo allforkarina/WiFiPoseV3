@@ -57,14 +57,27 @@ def nMPJPE(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
 
 
 class PoseStructureLoss(nn.Module):
-	def __init__(self, lambda_pose: float = 1.0, lambda_dist: float = 0.5, lambda_dir: float = 0.2) -> None:
+	def __init__(
+		self,
+		lambda_pose: float = 1.0,
+		lambda_rel: float = 1.0,
+		lambda_dist: float = 0.5,
+		lambda_dir: float = 0.2,
+		huber_beta: float = 0.05,
+	) -> None:
 		super().__init__()
 		self.lambda_pose = float(lambda_pose)
+		self.lambda_rel = float(lambda_rel)
 		self.lambda_dist = float(lambda_dist)
 		self.lambda_dir = float(lambda_dir)
+		self.huber_beta = float(huber_beta)
 
 	def forward(self, pred: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-		pose_loss = F.mse_loss(pred, target)
+		pose_loss = F.smooth_l1_loss(pred, target, beta=self.huber_beta)
+
+		pred_rel = pred.unsqueeze(2) - pred.unsqueeze(1)
+		target_rel = target.unsqueeze(2) - target.unsqueeze(1)
+		rel_loss = F.smooth_l1_loss(pred_rel, target_rel, beta=self.huber_beta)
 
 		pred_dist = torch.cdist(pred, pred, p=2)
 		target_dist = torch.cdist(target, target, p=2)
@@ -78,11 +91,13 @@ class PoseStructureLoss(nn.Module):
 
 		total = (
 			self.lambda_pose * pose_loss
+			+ self.lambda_rel * rel_loss
 			+ self.lambda_dist * dist_loss
 			+ self.lambda_dir * dir_loss
 		)
 		parts = {
 			"pose_loss": pose_loss.detach(),
+			"rel_loss": rel_loss.detach(),
 			"dist_loss": dist_loss.detach(),
 			"dir_loss": dir_loss.detach(),
 			"total_loss": total.detach(),
@@ -265,6 +280,7 @@ def train_one_epoch(
 	model.train()
 	running_loss = 0.0
 	running_pose_loss = 0.0
+	running_rel_loss = 0.0
 	running_dist_loss = 0.0
 	running_dir_loss = 0.0
 	grad_norms: list[float] = []
@@ -297,6 +313,7 @@ def train_one_epoch(
 		grad_norms.append(grad_norm)
 		running_loss += loss.item()
 		running_pose_loss += float(loss_parts["pose_loss"].item())
+		running_rel_loss += float(loss_parts["rel_loss"].item())
 		running_dist_loss += float(loss_parts["dist_loss"].item())
 		running_dir_loss += float(loss_parts["dir_loss"].item())
 		actions_seen.update(extract_meta_field(meta, "action"))
@@ -310,6 +327,7 @@ def train_one_epoch(
 		"has_nan_loss": has_nan_loss,
 		"has_nan_grad": has_nan_grad,
 		"pose_loss_mean": running_pose_loss / max(1, total_steps),
+		"rel_loss_mean": running_rel_loss / max(1, total_steps),
 		"dist_loss_mean": running_dist_loss / max(1, total_steps),
 		"dir_loss_mean": running_dir_loss / max(1, total_steps),
 		"actions_covered": len([x for x in actions_seen if x]),
@@ -324,6 +342,7 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device, criteri
 	total_err = 0.0
 	total_cnt = 0
 	total_pose = 0.0
+	total_rel = 0.0
 	total_dist = 0.0
 	total_dir = 0.0
 	with torch.no_grad():
@@ -336,12 +355,14 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device, criteri
 			batch_size = x.size(0)
 			total_loss += loss.item() * batch_size
 			total_pose += float(loss_parts["pose_loss"].item()) * batch_size
+			total_rel += float(loss_parts["rel_loss"].item()) * batch_size
 			total_dist += float(loss_parts["dist_loss"].item()) * batch_size
 			total_dir += float(loss_parts["dir_loss"].item()) * batch_size
 			total_err += err.item() * batch_size
 			total_cnt += batch_size
 	parts = {
 		"pose_loss": total_pose / max(1, total_cnt),
+		"rel_loss": total_rel / max(1, total_cnt),
 		"dist_loss": total_dist / max(1, total_cnt),
 		"dir_loss": total_dir / max(1, total_cnt),
 	}
@@ -494,8 +515,10 @@ def main() -> None:
 	loss_cfg = cfg.get("loss", {})
 	criterion = PoseStructureLoss(
 		lambda_pose=float(loss_cfg.get("lambda_pose", 1.0)),
+		lambda_rel=float(loss_cfg.get("lambda_angle", 1.0)),
 		lambda_dist=float(loss_cfg.get("lambda_len", 0.5)),
 		lambda_dir=float(loss_cfg.get("lambda_dir", 0.2)),
+		huber_beta=float(loss_cfg.get("huber_delta", 0.05)),
 	)
 	optimizer_name = train_cfg.get("optimizer", "AdamW")
 	lr = float(train_cfg.get("lr", 3e-4))
@@ -552,9 +575,11 @@ def main() -> None:
 			"val_loss": float(val_loss),
 			"val_nmpjpe": float(val_nm),
 			"train_pose_loss": float(train_stats["pose_loss_mean"]),
+			"train_rel_loss": float(train_stats["rel_loss_mean"]),
 			"train_dist_loss": float(train_stats["dist_loss_mean"]),
 			"train_dir_loss": float(train_stats["dir_loss_mean"]),
 			"val_pose_loss": float(val_parts["pose_loss"]),
+			"val_rel_loss": float(val_parts["rel_loss"]),
 			"val_dist_loss": float(val_parts["dist_loss"]),
 			"val_dir_loss": float(val_parts["dir_loss"]),
 			"grad_norm_mean": float(train_stats["grad_norm_mean"]),
@@ -568,8 +593,8 @@ def main() -> None:
 			"[epoch_summary] "
 			f"epoch={ep}/{epochs} time_epoch={ep_time:.1f}s elapsed={elapsed:.1f}s eta={eta:.1f}s "
 			f"train_loss={train_loss:.6f} val_loss={val_loss:.6f} val_nmpjpe={val_nm:.6f} "
-			f"train_pose={train_stats['pose_loss_mean']:.6f} train_dist={train_stats['dist_loss_mean']:.6f} train_dir={train_stats['dir_loss_mean']:.6f} "
-			f"val_pose={val_parts['pose_loss']:.6f} val_dist={val_parts['dist_loss']:.6f} val_dir={val_parts['dir_loss']:.6f} "
+			f"train_pose={train_stats['pose_loss_mean']:.6f} train_rel={train_stats['rel_loss_mean']:.6f} train_dist={train_stats['dist_loss_mean']:.6f} train_dir={train_stats['dir_loss_mean']:.6f} "
+			f"val_pose={val_parts['pose_loss']:.6f} val_rel={val_parts['rel_loss']:.6f} val_dist={val_parts['dist_loss']:.6f} val_dir={val_parts['dir_loss']:.6f} "
 			f"grad_norm_mean={train_stats['grad_norm_mean']:.3f} "
 			f"nan_loss={train_stats['has_nan_loss']} nan_grad={train_stats['has_nan_grad']} "
 			f"actions_covered={train_stats['actions_covered']} envs_covered={train_stats['envs_covered']}",
@@ -591,7 +616,7 @@ def main() -> None:
 	assessment, reason = assess_fit(history_rows, test_nm)
 	logger.log(
 		f"[test_summary] best_epoch={best_epoch} test_loss={test_loss:.6f} test_nmpjpe={test_nm:.6f} "
-		f"test_pose={test_parts['pose_loss']:.6f} test_dist={test_parts['dist_loss']:.6f} test_dir={test_parts['dir_loss']:.6f}",
+		f"test_pose={test_parts['pose_loss']:.6f} test_rel={test_parts['rel_loss']:.6f} test_dist={test_parts['dist_loss']:.6f} test_dir={test_parts['dir_loss']:.6f}",
 		always=True,
 	)
 	logger.log(f"[assessment] status={assessment} reason={reason}", always=True)
