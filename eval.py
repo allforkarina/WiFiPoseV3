@@ -22,6 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model_name", type=str, default=None, help="Model name override: conv1d_baseline | resnet1d")
     parser.add_argument("--aoa_cache_root", type=str, default=None)
     parser.add_argument("--labels_root", type=str, default=None)
+    parser.add_argument("--window_size", type=int, default=None)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="auto")
     return parser.parse_args()
@@ -112,12 +113,14 @@ def main() -> None:
     aoa_root, labels_root = resolve_data_roots(cfg, args.aoa_cache_root, args.labels_root)
     checkpoint_path = resolve_checkpoint(args.checkpoint)
     ckpt = torch.load(checkpoint_path, map_location="cpu")
+    ckpt_cfg = ckpt.get("config", cfg)
+    window_size = int(args.window_size if args.window_size is not None else ckpt_cfg.get("dataset", {}).get("window_size", cfg.get("dataset", {}).get("window_size", 1)))
 
-    model = build_model(cfg, device, args.model_name)
+    model = build_model(ckpt_cfg, device, args.model_name, window_size=window_size)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
 
-    ds = AOASampleDataset(aoa_root=aoa_root, labels_root=labels_root)
+    ds = AOASampleDataset(aoa_root=aoa_root, labels_root=labels_root, window_size=window_size)
     action_to_indices = build_action_index(ds)
     rng = random.Random(args.seed)
 

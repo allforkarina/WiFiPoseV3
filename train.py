@@ -17,7 +17,7 @@ import yaml
 
 from dataloader.aoa_dataset import AOASampleDataset, sample_to_env
 from dataloader.stratified_sampler import StratifiedBatchSampler
-from mymodels import ConvBaseline, ResNet1DPose
+from mymodels import ConvBaseline, MultiScaleTemporalPoseTCN, ResNet1DPose
 from utils.set_seed import set_seed
 
 
@@ -163,8 +163,9 @@ def build_dataloaders(
 	labels_root: Path,
 	val_env: str,
 	test_env: str,
+	window_size: int,
 ) -> tuple[DataLoader, DataLoader, DataLoader, dict[str, Any]]:
-	ds = AOASampleDataset(aoa_root=aoa_root, labels_root=labels_root)
+	ds = AOASampleDataset(aoa_root=aoa_root, labels_root=labels_root, window_size=window_size)
 	if len(ds) == 0:
 		raise RuntimeError(f"Dataset is empty. aoa_root={aoa_root} labels_root={labels_root}")
 
@@ -190,17 +191,19 @@ def build_dataloaders(
 		"val_size": len(val_indices),
 		"test_size": len(test_indices),
 		"batch_size": batch_size,
+		"window_size": window_size,
 		"val_env": val_env,
 		"test_env": test_env,
 	}
 	return train_loader, val_loader, test_loader, stats
 
 
-def build_model(cfg: Dict[str, Any], device: torch.device, model_name_override: str | None) -> nn.Module:
+def build_model(cfg: Dict[str, Any], device: torch.device, model_name_override: str | None, window_size: int | None = None) -> nn.Module:
 	mcfg = cfg.get("model", {})
 	model_name = (model_name_override or mcfg.get("name", "conv1d_baseline")).lower()
+	effective_window = int(window_size if window_size is not None else cfg.get("dataset", {}).get("window_size", 1))
 	common_kwargs = {
-		"input_channels": mcfg.get("input_channels", 1),
+		"input_channels": effective_window if model_name in {"conv1d_baseline", "resnet1d"} else mcfg.get("input_channels", 1),
 		"input_length": mcfg.get("input_length", 181),
 		"hidden_dim": mcfg.get("hidden_dim", 256),
 		"num_joints": mcfg.get("output_joints", 17),
@@ -211,6 +214,8 @@ def build_model(cfg: Dict[str, Any], device: torch.device, model_name_override: 
 		model = ConvBaseline(**common_kwargs)
 	elif model_name == "resnet1d":
 		model = ResNet1DPose(**common_kwargs)
+	elif model_name == "ms_tcn_pose":
+		model = MultiScaleTemporalPoseTCN(**common_kwargs)
 	else:
 		raise ValueError(f"Unsupported model name: {model_name}")
 	return model.to(device)
@@ -424,7 +429,8 @@ def main() -> None:
 	parser.add_argument("--val_env", type=str, default="env3")
 	parser.add_argument("--test_env", type=str, default="env4")
 	parser.add_argument("--epochs", type=int, default=None)
-	parser.add_argument("--model_name", type=str, default=None, help="conv1d_baseline | resnet1d")
+	parser.add_argument("--model_name", type=str, default=None, help="conv1d_baseline | resnet1d | ms_tcn_pose")
+	parser.add_argument("--window_size", type=int, default=None, help="Temporal AoA window size; even values are rounded up")
 	args = parser.parse_args()
 
 	config_path = Path(args.config)
@@ -435,6 +441,9 @@ def main() -> None:
 	logging_cfg = cfg.get("logging", {})
 	seed = int(train_cfg.get("seed", 42))
 	set_seed(seed)
+	window_size = int(args.window_size if args.window_size is not None else cfg.get("dataset", {}).get("window_size", 1))
+	if window_size % 2 == 0:
+		window_size += 1
 
 	device_str = train_cfg.get("device", "cuda" if torch.cuda.is_available() else "cpu")
 	device = torch.device(device_str)
@@ -444,6 +453,10 @@ def main() -> None:
 	log_dir = logs_root / "train"
 	run_name = logging_cfg.get("run_name", "default")
 	model_name = (args.model_name or cfg.get("model", {}).get("name", "conv1d_baseline")).lower()
+	cfg.setdefault("dataset", {})
+	cfg.setdefault("model", {})
+	cfg["dataset"]["window_size"] = window_size
+	cfg["model"]["name"] = model_name
 	ts = datetime.now().strftime("%Y%m%d-%H%M%S")
 	log_path = log_dir / f"{run_name}_{model_name}_{ts}.log"
 	history_path = log_dir / f"{run_name}_{model_name}_{ts}_history.csv"
@@ -453,6 +466,7 @@ def main() -> None:
 
 	logger.log(f"[run] config={args.config} device={device}", always=True)
 	logger.log(f"[run] model={model_name}", always=True)
+	logger.log(f"[run] window_size={window_size}", always=True)
 	logger.log(f"[run] aoa_cache_root={aoa_root}", always=True)
 	logger.log(f"[run] labels_root={labels_root}", always=True)
 	logger.log(f"[run] val_env={args.val_env} test_env={args.test_env}", always=True)
@@ -466,15 +480,17 @@ def main() -> None:
 		labels_root=labels_root,
 		val_env=args.val_env,
 		test_env=args.test_env,
+		window_size=window_size,
 	)
 	logger.log(
 		"[data] "
 		f"dataset_size={split_stats['dataset_size']} train_size={split_stats['train_size']} "
-		f"val_size={split_stats['val_size']} test_size={split_stats['test_size']} batch_size={split_stats['batch_size']}",
+		f"val_size={split_stats['val_size']} test_size={split_stats['test_size']} "
+		f"batch_size={split_stats['batch_size']} window_size={split_stats['window_size']}",
 		always=True,
 	)
 
-	model = build_model(cfg, device, args.model_name)
+	model = build_model(cfg, device, args.model_name, window_size=window_size)
 	loss_cfg = cfg.get("loss", {})
 	criterion = PoseStructureLoss(
 		lambda_pose=float(loss_cfg.get("lambda_pose", 1.0)),

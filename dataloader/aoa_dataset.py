@@ -22,10 +22,14 @@ class AOASampleDataset(Dataset):
     Each item is a single frame: (X: torch.Tensor (1,181), Y: torch.Tensor (17,2), meta: dict).
     """
 
-    def __init__(self, aoa_root: str | Path, labels_root: str | Path, transform=None):
+    def __init__(self, aoa_root: str | Path, labels_root: str | Path, transform=None, window_size: int = 1):
         self.aoa_root = Path(aoa_root)
         self.labels_root = Path(labels_root)
         self.transform = transform
+        self.window_size = max(1, int(window_size))
+        if self.window_size % 2 == 0:
+            self.window_size += 1
+        self.window_radius = self.window_size // 2
 
         self.index: List[Tuple[str, str, int]] = []
         self._h5_map: Dict[Tuple[str, str], Path] = {}
@@ -79,7 +83,13 @@ class AOASampleDataset(Dataset):
         action, sample, frame_idx = self.index[idx]
         h5_path = self._h5_map[(action, sample)]
         with h5py.File(h5_path, 'r') as hf:
-            aoa = np.asarray(hf['aoa_spectrum'][frame_idx], dtype=np.float32)
+            aoa_frames = hf['aoa_spectrum']
+            num_frames = int(aoa_frames.shape[0])
+            window = []
+            for offset in range(-self.window_radius, self.window_radius + 1):
+                source_idx = min(max(frame_idx + offset, 0), num_frames - 1)
+                window.append(self._normalize_aoa(np.asarray(aoa_frames[source_idx], dtype=np.float32)))
+            aoa = np.stack(window, axis=0)
             # try label_files in h5 if present
             label_path = None
             if 'label_files' in hf:
@@ -112,7 +122,7 @@ class AOASampleDataset(Dataset):
 
         label = np.load(label_path).astype(np.float32)
 
-        X = self._normalize_aoa(aoa)[np.newaxis, :]
+        X = aoa
         Y, pose_center, pose_scale = self._normalize_pose(label)
 
         if self.transform:
@@ -123,6 +133,7 @@ class AOASampleDataset(Dataset):
             'action': action,
             'sample': sample,
             'frame_idx': frame_idx,
+            'window_size': self.window_size,
             'aoa_h5': str(h5_path),
             'label_path': str(label_path),
             'pose_center': pose_center,
