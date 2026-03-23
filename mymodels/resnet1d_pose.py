@@ -48,6 +48,7 @@ class ResNet1DPose(nn.Module):
         super().__init__()
         self.num_joints = num_joints
         self.out_dim = out_dim
+        self.feature_dim = hidden_dim
 
         base_dim = max(64, hidden_dim // 4)
         mid_dim = max(128, hidden_dim // 2)
@@ -73,14 +74,20 @@ class ResNet1DPose(nn.Module):
             nn.Linear(hidden_dim, num_joints * out_dim),
         )
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward_features(self, x: Tensor) -> Tensor:
         if x.dim() == 2:
             x = x.unsqueeze(1)
         feats = self.stem(x)
         feats = self.backbone(feats)
-        out = self.pool(feats)
-        out = self.head(out)
+        pooled = self.pool(feats)
+        return torch.flatten(pooled, 1)
+
+    def forward_head(self, feats: Tensor) -> Tensor:
+        out = self.head[1:](self.head[0](feats))
         return out.view(out.size(0), self.num_joints, self.out_dim)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.forward_head(self.forward_features(x))
 
 
 if __name__ == "__main__":

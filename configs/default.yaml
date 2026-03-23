@@ -83,9 +83,17 @@ loss:
   lambda_len: 1.0                   # 骨长比例一致性
   lambda_sym: 0.1                   # 对称性
   lambda_reg: 0.01                  # 防塌缩 soft constraint
-  lambda_var: 0.1                   # batch-level variance preservation
+  lambda_var: 0.0                   # 旧的 batch variance 约束默认关闭，避免与跨样本差异约束冲突
+  lambda_batch_div: 0.3             # 直接保持 batch 内样本间姿态差异，抑制平均姿态塌缩
   preserve_ratio: 0.6               # pred std 至少保留 target std 的该比例
   huber_delta: 1.0
+
+# 动作辅助监督：不直接参与推理，但强制 backbone 特征区分 A01-A27
+action_aux:
+  enable: true
+  num_actions: 27
+  lambda_cls: 0.2
+  dropout: 0.1
 
 # 泛化 / 域适应开关
 domain_adaptation:

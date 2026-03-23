@@ -37,6 +37,7 @@ class MultiScaleTemporalPoseTCN(nn.Module):
         super().__init__()
         self.num_joints = num_joints
         self.out_dim = out_dim
+        self.feature_dim = hidden_dim
 
         frame_dim = max(128, hidden_dim // 2)
         self.frame_encoder = nn.Sequential(
@@ -73,7 +74,7 @@ class MultiScaleTemporalPoseTCN(nn.Module):
             nn.Linear(hidden_dim, num_joints * out_dim),
         )
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward_features(self, x: Tensor) -> Tensor:
         if x.dim() == 2:
             x = x.unsqueeze(1).unsqueeze(1)
         elif x.dim() == 3:
@@ -90,9 +91,14 @@ class MultiScaleTemporalPoseTCN(nn.Module):
         multi_scale = [block(temporal) for block in self.temporal_blocks]
         fused = self.fusion(torch.cat(multi_scale, dim=1))
         center_idx = fused.size(-1) // 2
-        center_feat = fused[:, :, center_idx]
-        out = self.head(center_feat)
+        return fused[:, :, center_idx]
+
+    def forward_head(self, feats: Tensor) -> Tensor:
+        out = self.head(feats)
         return out.view(out.size(0), self.num_joints, self.out_dim)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.forward_head(self.forward_features(x))
 
 
 if __name__ == "__main__":

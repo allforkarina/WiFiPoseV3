@@ -22,6 +22,7 @@ from utils.set_seed import set_seed
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
+ACTION_NAMES = [f"A{idx:02d}" for idx in range(1, 28)]
 
 
 def load_config(cfg_path: str | Path) -> Dict[str, Any]:
@@ -64,6 +65,7 @@ class PoseStructureLoss(nn.Module):
 		lambda_dist: float = 0.5,
 		lambda_dir: float = 0.2,
 		lambda_var: float = 0.1,
+		lambda_batch_div: float = 0.0,
 		preserve_ratio: float = 0.6,
 		huber_beta: float = 0.05,
 	) -> None:
@@ -73,6 +75,7 @@ class PoseStructureLoss(nn.Module):
 		self.lambda_dist = float(lambda_dist)
 		self.lambda_dir = float(lambda_dir)
 		self.lambda_var = float(lambda_var)
+		self.lambda_batch_div = float(lambda_batch_div)
 		self.preserve_ratio = float(preserve_ratio)
 		self.huber_beta = float(huber_beta)
 
@@ -100,12 +103,32 @@ class PoseStructureLoss(nn.Module):
 		var_loss = F.relu((target_std * self.preserve_ratio) - pred_std).mean()
 		std_ratio = pred_std.mean() / target_std.mean().clamp(min=1e-8)
 
+		if pred.size(0) >= 2:
+			pred_sample_dist = torch.cdist(pred_flat, pred_flat, p=2)
+			target_sample_dist = torch.cdist(target_flat, target_flat, p=2)
+			off_diag = ~torch.eye(pred.size(0), dtype=torch.bool, device=pred.device)
+			pred_pairs = pred_sample_dist[off_diag]
+			target_pairs = target_sample_dist[off_diag]
+			target_pair_mean = target_pairs.mean().clamp(min=1e-6)
+			batch_div_loss = F.smooth_l1_loss(
+				pred_pairs / target_pair_mean,
+				target_pairs / target_pair_mean,
+				beta=self.huber_beta,
+			)
+			pair_dist_ratio = pred_pairs.mean() / target_pairs.mean().clamp(min=1e-8)
+		else:
+			batch_div_loss = pred_flat.new_zeros(())
+			target_pairs = pred_flat.new_zeros((1,))
+			pred_pairs = pred_flat.new_zeros((1,))
+			pair_dist_ratio = pred_flat.new_zeros(())
+
 		total = (
 			self.lambda_pose * pose_loss
 			+ self.lambda_rel * rel_loss
 			+ self.lambda_dist * dist_loss
 			+ self.lambda_dir * dir_loss
 			+ self.lambda_var * var_loss
+			+ self.lambda_batch_div * batch_div_loss
 		)
 		parts = {
 			"pose_loss": pose_loss.detach(),
@@ -113,12 +136,32 @@ class PoseStructureLoss(nn.Module):
 			"dist_loss": dist_loss.detach(),
 			"dir_loss": dir_loss.detach(),
 			"var_loss": var_loss.detach(),
+			"batch_div_loss": batch_div_loss.detach(),
 			"pred_std_mean": pred_std.mean().detach(),
 			"target_std_mean": target_std.mean().detach(),
 			"std_ratio": std_ratio.detach(),
+			"pred_pair_dist_mean": pred_pairs.mean().detach(),
+			"target_pair_dist_mean": target_pairs.mean().detach(),
+			"pair_dist_ratio": pair_dist_ratio.detach(),
 			"total_loss": total.detach(),
 		}
 		return total, parts
+
+
+class ActionAuxHead(nn.Module):
+	def __init__(self, input_dim: int, num_actions: int, dropout: float = 0.1) -> None:
+		super().__init__()
+		hidden_dim = max(64, input_dim // 2)
+		self.net = nn.Sequential(
+			nn.Dropout(dropout),
+			nn.Linear(input_dim, hidden_dim),
+			nn.ReLU(inplace=True),
+			nn.Dropout(dropout),
+			nn.Linear(hidden_dim, num_actions),
+		)
+
+	def forward(self, feats: torch.Tensor) -> torch.Tensor:
+		return self.net(feats)
 
 
 def resolve_path(path_value: str | Path | None, default: Path) -> Path:
@@ -148,6 +191,28 @@ def extract_meta_field(meta: Any, key: str) -> list[str]:
 				values.append(str(item.get(key, "")))
 		return values
 	return []
+
+
+def action_to_index(action_id: str) -> int:
+	if action_id in ACTION_NAMES:
+		return ACTION_NAMES.index(action_id)
+	try:
+		return max(0, int(action_id.lstrip("A").lstrip("a")) - 1)
+	except Exception:
+		return 0
+
+
+def build_action_targets(meta: Any, device: torch.device) -> torch.Tensor:
+	actions = extract_meta_field(meta, "action")
+	return torch.tensor([action_to_index(action) for action in actions], dtype=torch.long, device=device)
+
+
+def forward_pose_with_features(model: nn.Module, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+	if not hasattr(model, "forward_features") or not hasattr(model, "forward_head"):
+		raise AttributeError("Model must implement forward_features() and forward_head() for anti-collapse training.")
+	features = model.forward_features(x)
+	pred = model.forward_head(features)
+	return pred, features
 
 
 def split_indices_by_envs(
@@ -252,41 +317,68 @@ def build_model(cfg: Dict[str, Any], device: torch.device, model_name_override: 
 	return model.to(device)
 
 
-def save_checkpoint(path: Path, model: nn.Module, optimizer: torch.optim.Optimizer, epoch: int, cfg: Dict[str, Any]) -> None:
+def save_checkpoint(
+	path: Path,
+	model: nn.Module,
+	optimizer: torch.optim.Optimizer,
+	epoch: int,
+	cfg: Dict[str, Any],
+	extra_modules: dict[str, nn.Module] | None = None,
+) -> None:
 	state = {
 		"model_state": model.state_dict(),
 		"optimizer_state": optimizer.state_dict(),
 		"epoch": epoch,
 		"config": cfg,
 	}
+	if extra_modules:
+		state["extra_modules"] = {
+			name: module.state_dict()
+			for name, module in extra_modules.items()
+			if module is not None
+		}
 	path.parent.mkdir(parents=True, exist_ok=True)
 	torch.save(state, path)
 
 
-def load_checkpoint(path: Path, model: nn.Module, optimizer: torch.optim.Optimizer | None = None) -> int:
+def load_checkpoint(
+	path: Path,
+	model: nn.Module,
+	optimizer: torch.optim.Optimizer | None = None,
+	extra_modules: dict[str, nn.Module] | None = None,
+) -> int:
 	ckpt = torch.load(path, map_location="cpu")
 	model.load_state_dict(ckpt["model_state"])
 	if optimizer is not None and "optimizer_state" in ckpt:
 		optimizer.load_state_dict(ckpt["optimizer_state"])
+	if extra_modules and "extra_modules" in ckpt:
+		for name, module in extra_modules.items():
+			if module is not None and name in ckpt["extra_modules"]:
+				module.load_state_dict(ckpt["extra_modules"][name])
 	return int(ckpt.get("epoch", 0))
 
 
-def _compute_grad_norm(model: nn.Module) -> float:
+def _compute_grad_norm(*modules: nn.Module | None) -> float:
 	total_sq = 0.0
-	for p in model.parameters():
-		if p.grad is None:
+	for module in modules:
+		if module is None:
 			continue
-		norm = p.grad.data.norm(2).item()
-		total_sq += norm * norm
+		for p in module.parameters():
+			if p.grad is None:
+				continue
+			norm = p.grad.data.norm(2).item()
+			total_sq += norm * norm
 	return math.sqrt(total_sq) if total_sq > 0 else 0.0
 
 
 def train_one_epoch(
 	model: nn.Module,
+	action_head: ActionAuxHead | None,
 	loader: DataLoader,
 	device: torch.device,
 	optimizer: torch.optim.Optimizer,
 	criterion: PoseStructureLoss,
+	lambda_action_cls: float,
 	max_steps: int,
 	epoch: int,
 	num_epochs: int,
@@ -294,15 +386,23 @@ def train_one_epoch(
 	log_interval: int,
 ) -> tuple[float, Dict[str, Any]]:
 	model.train()
+	if action_head is not None:
+		action_head.train()
 	running_loss = 0.0
 	running_pose_loss = 0.0
 	running_rel_loss = 0.0
 	running_dist_loss = 0.0
 	running_dir_loss = 0.0
 	running_var_loss = 0.0
+	running_batch_div_loss = 0.0
 	running_pred_std = 0.0
 	running_target_std = 0.0
 	running_std_ratio = 0.0
+	running_pred_pair_dist = 0.0
+	running_target_pair_dist = 0.0
+	running_pair_dist_ratio = 0.0
+	running_action_cls_loss = 0.0
+	running_action_acc = 0.0
 	grad_norms: list[float] = []
 	has_nan_loss = False
 	has_nan_grad = False
@@ -314,20 +414,29 @@ def train_one_epoch(
 		x = x.to(device)
 		y = y.to(device)
 		optimizer.zero_grad()
-		pred = model(x)
+		pred, features = forward_pose_with_features(model, x)
 		loss, loss_parts = criterion(pred, y)
+		if action_head is not None:
+			action_targets = build_action_targets(meta, device)
+			action_logits = action_head(features)
+			action_cls_loss = F.cross_entropy(action_logits, action_targets)
+			action_acc = (action_logits.argmax(dim=1) == action_targets).float().mean()
+			loss = loss + (lambda_action_cls * action_cls_loss)
+		else:
+			action_cls_loss = loss.detach().new_zeros(())
+			action_acc = loss.detach().new_zeros(())
 		if not torch.isfinite(loss):
 			logger.log(f"[warn] epoch={epoch} step={step+1} non-finite loss: {loss.item()}", always=True)
 			has_nan_loss = True
 			break
 		loss.backward()
-		grad_norm = _compute_grad_norm(model)
+		grad_norm = _compute_grad_norm(model, action_head)
 		if not math.isfinite(grad_norm):
 			has_nan_grad = True
-		logger.log(
-			f"[train] epoch={epoch}/{num_epochs} step={step+1}/{total_steps} loss={loss.item():.6f} grad_norm={grad_norm:.3f}",
-			always=((step + 1) % log_interval == 0 or step == 0),
-		)
+		log_msg = f"[train] epoch={epoch}/{num_epochs} step={step+1}/{total_steps} loss={loss.item():.6f} grad_norm={grad_norm:.3f}"
+		if action_head is not None:
+			log_msg += f" action_cls={action_cls_loss.item():.6f} action_acc={action_acc.item():.3f}"
+		logger.log(log_msg, always=((step + 1) % log_interval == 0 or step == 0))
 		optimizer.step()
 
 		grad_norms.append(grad_norm)
@@ -337,9 +446,15 @@ def train_one_epoch(
 		running_dist_loss += float(loss_parts["dist_loss"].item())
 		running_dir_loss += float(loss_parts["dir_loss"].item())
 		running_var_loss += float(loss_parts["var_loss"].item())
+		running_batch_div_loss += float(loss_parts["batch_div_loss"].item())
 		running_pred_std += float(loss_parts["pred_std_mean"].item())
 		running_target_std += float(loss_parts["target_std_mean"].item())
 		running_std_ratio += float(loss_parts["std_ratio"].item())
+		running_pred_pair_dist += float(loss_parts["pred_pair_dist_mean"].item())
+		running_target_pair_dist += float(loss_parts["target_pair_dist_mean"].item())
+		running_pair_dist_ratio += float(loss_parts["pair_dist_ratio"].item())
+		running_action_cls_loss += float(action_cls_loss.item())
+		running_action_acc += float(action_acc.item())
 		actions_seen.update(extract_meta_field(meta, "action"))
 		envs_seen.update(extract_meta_field(meta, "env_id"))
 		if step + 1 >= total_steps:
@@ -355,17 +470,32 @@ def train_one_epoch(
 		"dist_loss_mean": running_dist_loss / max(1, total_steps),
 		"dir_loss_mean": running_dir_loss / max(1, total_steps),
 		"var_loss_mean": running_var_loss / max(1, total_steps),
+		"batch_div_loss_mean": running_batch_div_loss / max(1, total_steps),
 		"pred_std_mean": running_pred_std / max(1, total_steps),
 		"target_std_mean": running_target_std / max(1, total_steps),
 		"std_ratio_mean": running_std_ratio / max(1, total_steps),
+		"pred_pair_dist_mean": running_pred_pair_dist / max(1, total_steps),
+		"target_pair_dist_mean": running_target_pair_dist / max(1, total_steps),
+		"pair_dist_ratio_mean": running_pair_dist_ratio / max(1, total_steps),
+		"action_cls_loss_mean": running_action_cls_loss / max(1, total_steps),
+		"action_acc_mean": running_action_acc / max(1, total_steps),
 		"actions_covered": len([x for x in actions_seen if x]),
 		"envs_covered": len([x for x in envs_seen if x]),
 	}
 	return avg_loss, stats
 
 
-def evaluate(model: nn.Module, loader: DataLoader, device: torch.device, criterion: PoseStructureLoss) -> tuple[float, float, dict[str, float]]:
+def evaluate(
+	model: nn.Module,
+	action_head: ActionAuxHead | None,
+	loader: DataLoader,
+	device: torch.device,
+	criterion: PoseStructureLoss,
+	lambda_action_cls: float,
+) -> tuple[float, float, dict[str, float]]:
 	model.eval()
+	if action_head is not None:
+		action_head.eval()
 	total_loss = 0.0
 	total_err = 0.0
 	total_cnt = 0
@@ -374,15 +504,30 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device, criteri
 	total_dist = 0.0
 	total_dir = 0.0
 	total_var = 0.0
+	total_batch_div = 0.0
 	total_pred_std = 0.0
 	total_target_std = 0.0
 	total_std_ratio = 0.0
+	total_pred_pair_dist = 0.0
+	total_target_pair_dist = 0.0
+	total_pair_dist_ratio = 0.0
+	total_action_cls = 0.0
+	total_action_acc = 0.0
 	with torch.no_grad():
-		for x, y, _ in loader:
+		for x, y, meta in loader:
 			x = x.to(device)
 			y = y.to(device)
-			pred = model(x)
+			pred, features = forward_pose_with_features(model, x)
 			loss, loss_parts = criterion(pred, y)
+			if action_head is not None:
+				action_targets = build_action_targets(meta, device)
+				action_logits = action_head(features)
+				action_cls_loss = F.cross_entropy(action_logits, action_targets)
+				action_acc = (action_logits.argmax(dim=1) == action_targets).float().mean()
+				loss = loss + (lambda_action_cls * action_cls_loss)
+			else:
+				action_cls_loss = loss.detach().new_zeros(())
+				action_acc = loss.detach().new_zeros(())
 			err = nMPJPE(pred, y)
 			batch_size = x.size(0)
 			total_loss += loss.item() * batch_size
@@ -391,9 +536,15 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device, criteri
 			total_dist += float(loss_parts["dist_loss"].item()) * batch_size
 			total_dir += float(loss_parts["dir_loss"].item()) * batch_size
 			total_var += float(loss_parts["var_loss"].item()) * batch_size
+			total_batch_div += float(loss_parts["batch_div_loss"].item()) * batch_size
 			total_pred_std += float(loss_parts["pred_std_mean"].item()) * batch_size
 			total_target_std += float(loss_parts["target_std_mean"].item()) * batch_size
 			total_std_ratio += float(loss_parts["std_ratio"].item()) * batch_size
+			total_pred_pair_dist += float(loss_parts["pred_pair_dist_mean"].item()) * batch_size
+			total_target_pair_dist += float(loss_parts["target_pair_dist_mean"].item()) * batch_size
+			total_pair_dist_ratio += float(loss_parts["pair_dist_ratio"].item()) * batch_size
+			total_action_cls += float(action_cls_loss.item()) * batch_size
+			total_action_acc += float(action_acc.item()) * batch_size
 			total_err += err.item() * batch_size
 			total_cnt += batch_size
 	parts = {
@@ -402,9 +553,15 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device, criteri
 		"dist_loss": total_dist / max(1, total_cnt),
 		"dir_loss": total_dir / max(1, total_cnt),
 		"var_loss": total_var / max(1, total_cnt),
+		"batch_div_loss": total_batch_div / max(1, total_cnt),
 		"pred_std_mean": total_pred_std / max(1, total_cnt),
 		"target_std_mean": total_target_std / max(1, total_cnt),
 		"std_ratio": total_std_ratio / max(1, total_cnt),
+		"pred_pair_dist_mean": total_pred_pair_dist / max(1, total_cnt),
+		"target_pair_dist_mean": total_target_pair_dist / max(1, total_cnt),
+		"pair_dist_ratio": total_pair_dist_ratio / max(1, total_cnt),
+		"action_cls_loss": total_action_cls / max(1, total_cnt),
+		"action_acc": total_action_acc / max(1, total_cnt),
 	}
 	return total_loss / max(1, total_cnt), total_err / max(1, total_cnt), parts
 
@@ -552,6 +709,23 @@ def main() -> None:
 	)
 
 	model = build_model(cfg, device, args.model_name, window_size=window_size)
+	action_aux_cfg = cfg.get("action_aux", {})
+	use_action_aux = bool(action_aux_cfg.get("enable", False))
+	lambda_action_cls = float(action_aux_cfg.get("lambda_cls", 0.0))
+	action_head: ActionAuxHead | None = None
+	if use_action_aux:
+		feature_dim = int(getattr(model, "feature_dim"))
+		action_head = ActionAuxHead(
+			input_dim=feature_dim,
+			num_actions=int(action_aux_cfg.get("num_actions", len(ACTION_NAMES))),
+			dropout=float(action_aux_cfg.get("dropout", cfg.get("model", {}).get("dropout", 0.2))),
+		).to(device)
+		logger.log(
+			f"[run] action_aux enabled=True lambda_cls={lambda_action_cls:.3f} num_actions={int(action_aux_cfg.get('num_actions', len(ACTION_NAMES)))}",
+			always=True,
+		)
+	else:
+		logger.log("[run] action_aux enabled=False", always=True)
 	loss_cfg = cfg.get("loss", {})
 	criterion = PoseStructureLoss(
 		lambda_pose=float(loss_cfg.get("lambda_pose", 1.0)),
@@ -559,23 +733,32 @@ def main() -> None:
 		lambda_dist=float(loss_cfg.get("lambda_len", 0.5)),
 		lambda_dir=float(loss_cfg.get("lambda_dir", 0.2)),
 		lambda_var=float(loss_cfg.get("lambda_var", 0.1)),
+		lambda_batch_div=float(loss_cfg.get("lambda_batch_div", 0.0)),
 		preserve_ratio=float(loss_cfg.get("preserve_ratio", 0.6)),
 		huber_beta=float(loss_cfg.get("huber_delta", 0.05)),
 	)
 	optimizer_name = train_cfg.get("optimizer", "AdamW")
 	lr = float(train_cfg.get("lr", 3e-4))
 	weight_decay = float(train_cfg.get("weight_decay", 1e-4))
+	trainable_params = list(model.parameters())
+	if action_head is not None:
+		trainable_params.extend(action_head.parameters())
 	if optimizer_name.lower() == "adamw":
-		optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+		optimizer = torch.optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
 	else:
-		optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+		optimizer = torch.optim.Adam(trainable_params, lr=lr, weight_decay=weight_decay)
 
 	ckpt_path = Path(args.checkpoint)
 	if not ckpt_path.is_absolute():
 		ckpt_path = PROJECT_ROOT / ckpt_path
 	start_epoch = 0
 	if args.resume and ckpt_path.exists():
-		start_epoch = load_checkpoint(ckpt_path, model, optimizer)
+		start_epoch = load_checkpoint(
+			ckpt_path,
+			model,
+			optimizer,
+			extra_modules={"action_head": action_head} if action_head is not None else None,
+		)
 		logger.log(f"[ckpt] resumed_from={ckpt_path} start_epoch={start_epoch+1}", always=True)
 
 	epochs = int(args.epochs if args.epochs is not None else train_cfg.get("epochs", 1))
@@ -594,17 +777,19 @@ def main() -> None:
 		)
 		train_loss, train_stats = train_one_epoch(
 			model=model,
+			action_head=action_head,
 			loader=train_loader,
 			device=device,
 			optimizer=optimizer,
 			criterion=criterion,
+			lambda_action_cls=lambda_action_cls,
 			max_steps=args.max_steps,
 			epoch=ep,
 			num_epochs=epochs,
 			logger=logger,
 			log_interval=max(1, args.log_interval),
 		)
-		val_loss, val_nm, val_parts = evaluate(model, val_loader, device, criterion)
+		val_loss, val_nm, val_parts = evaluate(model, action_head, val_loader, device, criterion, lambda_action_cls)
 
 		elapsed = time.time() - start_time
 		ep_time = elapsed - prev_elapsed
@@ -621,17 +806,29 @@ def main() -> None:
 			"train_dist_loss": float(train_stats["dist_loss_mean"]),
 			"train_dir_loss": float(train_stats["dir_loss_mean"]),
 			"train_var_loss": float(train_stats["var_loss_mean"]),
+			"train_batch_div_loss": float(train_stats["batch_div_loss_mean"]),
 			"val_pose_loss": float(val_parts["pose_loss"]),
 			"val_rel_loss": float(val_parts["rel_loss"]),
 			"val_dist_loss": float(val_parts["dist_loss"]),
 			"val_dir_loss": float(val_parts["dir_loss"]),
 			"val_var_loss": float(val_parts["var_loss"]),
+			"val_batch_div_loss": float(val_parts["batch_div_loss"]),
 			"train_pred_std_mean": float(train_stats["pred_std_mean"]),
 			"train_target_std_mean": float(train_stats["target_std_mean"]),
 			"train_std_ratio": float(train_stats["std_ratio_mean"]),
+			"train_pred_pair_dist_mean": float(train_stats["pred_pair_dist_mean"]),
+			"train_target_pair_dist_mean": float(train_stats["target_pair_dist_mean"]),
+			"train_pair_dist_ratio": float(train_stats["pair_dist_ratio_mean"]),
 			"val_pred_std_mean": float(val_parts["pred_std_mean"]),
 			"val_target_std_mean": float(val_parts["target_std_mean"]),
 			"val_std_ratio": float(val_parts["std_ratio"]),
+			"val_pred_pair_dist_mean": float(val_parts["pred_pair_dist_mean"]),
+			"val_target_pair_dist_mean": float(val_parts["target_pair_dist_mean"]),
+			"val_pair_dist_ratio": float(val_parts["pair_dist_ratio"]),
+			"train_action_cls_loss": float(train_stats["action_cls_loss_mean"]),
+			"train_action_acc": float(train_stats["action_acc_mean"]),
+			"val_action_cls_loss": float(val_parts["action_cls_loss"]),
+			"val_action_acc": float(val_parts["action_acc"]),
 			"grad_norm_mean": float(train_stats["grad_norm_mean"]),
 			"nan_loss": bool(train_stats["has_nan_loss"]),
 			"nan_grad": bool(train_stats["has_nan_grad"]),
@@ -643,10 +840,14 @@ def main() -> None:
 			"[epoch_summary] "
 			f"epoch={ep}/{epochs} time_epoch={ep_time:.1f}s elapsed={elapsed:.1f}s eta={eta:.1f}s "
 			f"train_loss={train_loss:.6f} val_loss={val_loss:.6f} val_nmpjpe={val_nm:.6f} "
-			f"train_pose={train_stats['pose_loss_mean']:.6f} train_rel={train_stats['rel_loss_mean']:.6f} train_dist={train_stats['dist_loss_mean']:.6f} train_dir={train_stats['dir_loss_mean']:.6f} train_var={train_stats['var_loss_mean']:.6f} "
-			f"val_pose={val_parts['pose_loss']:.6f} val_rel={val_parts['rel_loss']:.6f} val_dist={val_parts['dist_loss']:.6f} val_dir={val_parts['dir_loss']:.6f} val_var={val_parts['var_loss']:.6f} "
+			f"train_pose={train_stats['pose_loss_mean']:.6f} train_rel={train_stats['rel_loss_mean']:.6f} train_dist={train_stats['dist_loss_mean']:.6f} train_dir={train_stats['dir_loss_mean']:.6f} train_var={train_stats['var_loss_mean']:.6f} train_batch_div={train_stats['batch_div_loss_mean']:.6f} "
+			f"val_pose={val_parts['pose_loss']:.6f} val_rel={val_parts['rel_loss']:.6f} val_dist={val_parts['dist_loss']:.6f} val_dir={val_parts['dir_loss']:.6f} val_var={val_parts['var_loss']:.6f} val_batch_div={val_parts['batch_div_loss']:.6f} "
 			f"train_std={train_stats['pred_std_mean']:.6f}/{train_stats['target_std_mean']:.6f} train_std_ratio={train_stats['std_ratio_mean']:.6f} "
 			f"val_std={val_parts['pred_std_mean']:.6f}/{val_parts['target_std_mean']:.6f} val_std_ratio={val_parts['std_ratio']:.6f} "
+			f"train_pair_dist={train_stats['pred_pair_dist_mean']:.6f}/{train_stats['target_pair_dist_mean']:.6f} train_pair_ratio={train_stats['pair_dist_ratio_mean']:.6f} "
+			f"val_pair_dist={val_parts['pred_pair_dist_mean']:.6f}/{val_parts['target_pair_dist_mean']:.6f} val_pair_ratio={val_parts['pair_dist_ratio']:.6f} "
+			f"train_action_cls={train_stats['action_cls_loss_mean']:.6f} train_action_acc={train_stats['action_acc_mean']:.3f} "
+			f"val_action_cls={val_parts['action_cls_loss']:.6f} val_action_acc={val_parts['action_acc']:.3f} "
 			f"grad_norm_mean={train_stats['grad_norm_mean']:.3f} "
 			f"nan_loss={train_stats['has_nan_loss']} nan_grad={train_stats['has_nan_grad']} "
 			f"actions_covered={train_stats['actions_covered']} envs_covered={train_stats['envs_covered']}",
@@ -656,21 +857,34 @@ def main() -> None:
 		if val_nm < best_val:
 			best_val = val_nm
 			best_epoch = ep
-			save_checkpoint(ckpt_path, model, optimizer, epoch=ep, cfg=cfg)
+			save_checkpoint(
+				ckpt_path,
+				model,
+				optimizer,
+				epoch=ep,
+				cfg=cfg,
+				extra_modules={"action_head": action_head} if action_head is not None else None,
+			)
 			logger.log(f"[ckpt] saved path={ckpt_path} epoch={ep} best_val_nmpjpe={best_val:.6f}", always=True)
 		else:
 			logger.log(f"[ckpt] no_improve best_epoch={best_epoch} best_val_nmpjpe={best_val:.6f}", always=True)
 
-	load_checkpoint(ckpt_path, model)
-	test_loss, test_nm, test_parts = evaluate(model, test_loader, device, criterion)
+	load_checkpoint(
+		ckpt_path,
+		model,
+		extra_modules={"action_head": action_head} if action_head is not None else None,
+	)
+	test_loss, test_nm, test_parts = evaluate(model, action_head, test_loader, device, criterion, lambda_action_cls)
 	plot_history(plot_path, history_rows, logger)
 	logger.log(f"[history] saved path={history_path}", always=True)
 	assessment, reason = assess_fit(history_rows, test_nm)
 	logger.log(
 		f"[test_summary] best_epoch={best_epoch} test_loss={test_loss:.6f} test_nmpjpe={test_nm:.6f} "
 		f"test_pose={test_parts['pose_loss']:.6f} test_rel={test_parts['rel_loss']:.6f} test_dist={test_parts['dist_loss']:.6f} "
-		f"test_dir={test_parts['dir_loss']:.6f} test_var={test_parts['var_loss']:.6f} "
-		f"test_std={test_parts['pred_std_mean']:.6f}/{test_parts['target_std_mean']:.6f} test_std_ratio={test_parts['std_ratio']:.6f}",
+		f"test_dir={test_parts['dir_loss']:.6f} test_var={test_parts['var_loss']:.6f} test_batch_div={test_parts['batch_div_loss']:.6f} "
+		f"test_std={test_parts['pred_std_mean']:.6f}/{test_parts['target_std_mean']:.6f} test_std_ratio={test_parts['std_ratio']:.6f} "
+		f"test_pair_dist={test_parts['pred_pair_dist_mean']:.6f}/{test_parts['target_pair_dist_mean']:.6f} test_pair_ratio={test_parts['pair_dist_ratio']:.6f} "
+		f"test_action_cls={test_parts['action_cls_loss']:.6f} test_action_acc={test_parts['action_acc']:.3f}",
 		always=True,
 	)
 	logger.log(f"[assessment] status={assessment} reason={reason}", always=True)

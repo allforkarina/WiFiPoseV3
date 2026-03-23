@@ -28,6 +28,7 @@ class ConvBaseline(nn.Module):
         self.input_length = input_length
         self.num_joints = num_joints
         self.out_dim = out_dim
+        self.feature_dim = hidden_dim
 
         # A small stack of 1D conv + BN + ReLU layers
         self.feature = nn.Sequential(
@@ -49,6 +50,18 @@ class ConvBaseline(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.head = nn.Linear(hidden_dim, num_joints * out_dim)
 
+    def forward_features(self, x: Tensor) -> Tensor:
+        # Ensure expected shape (B, C, L)
+        if x.dim() == 2:
+            x = x.unsqueeze(1)
+        feats = self.feature(x).squeeze(-1)  # (B, hidden_dim)
+        return self.dropout(feats)
+
+    def forward_head(self, feats: Tensor) -> Tensor:
+        out = self.head(feats)  # (B, num_joints * out_dim)
+        pose = out.view(out.size(0), self.num_joints, self.out_dim)
+        return pose
+
     def forward(self, x: Tensor) -> Tensor | Tuple[Tensor, Optional[Tensor]]:
         """Forward pass.
 
@@ -60,17 +73,7 @@ class ConvBaseline(nn.Module):
             Optionally, a confidence tensor could be added later; for now
             only the pose tensor is returned to match the minimal interface.
         """
-
-        # Ensure expected shape (B, C, L)
-        if x.dim() == 2:
-            # (B, L) -> (B, 1, L)
-            x = x.unsqueeze(1)
-
-        feats = self.feature(x).squeeze(-1)  # (B, hidden_dim)
-        feats = self.dropout(feats)
-        out = self.head(feats)  # (B, num_joints * out_dim)
-        pose = out.view(out.size(0), self.num_joints, self.out_dim)
-        return pose
+        return self.forward_head(self.forward_features(x))
 
 
 if __name__ == "__main__":  # simple smoke test
