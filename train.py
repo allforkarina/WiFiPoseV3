@@ -281,6 +281,32 @@ def resolve_scheduled_lambda(
 	return base_value
 
 
+def compute_checkpoint_selection_score(
+	val_nmpjpe: float,
+	val_parts: dict[str, float],
+	checkpoint_cfg: dict[str, Any],
+) -> tuple[float, str]:
+	selection_cfg = checkpoint_cfg.get("selection", {})
+	mode = str(selection_cfg.get("mode", "accuracy")).lower()
+	if mode == "accuracy":
+		return -float(val_nmpjpe), "accuracy"
+
+	if mode == "diversity_first":
+		pair_w = float(selection_cfg.get("pair_ratio_weight", 1.0))
+		std_w = float(selection_cfg.get("std_ratio_weight", 0.35))
+		inter_w = float(selection_cfg.get("inter_pair_ratio_weight", 0.15))
+		nm_penalty = float(selection_cfg.get("nmpjpe_penalty", 0.02))
+		score = (
+			pair_w * float(val_parts.get("pair_dist_ratio", 0.0))
+			+ std_w * float(val_parts.get("std_ratio", 0.0))
+			+ inter_w * float(val_parts.get("inter_pair_dist_ratio", 0.0))
+			- nm_penalty * float(val_nmpjpe)
+		)
+		return score, "diversity_first"
+
+	return -float(val_nmpjpe), mode
+
+
 def extract_meta_field(meta: Any, key: str) -> list[str]:
 	if isinstance(meta, dict):
 		value = meta.get(key, [])
@@ -918,6 +944,8 @@ def main() -> None:
 	epochs = int(args.epochs if args.epochs is not None else train_cfg.get("epochs", 1))
 	start_time = time.time()
 	prev_elapsed = 0.0
+	checkpoint_cfg = cfg.get("checkpoint", {})
+	best_selection_score = float("-inf")
 	best_val = float("inf")
 	best_epoch = start_epoch
 	history_rows: list[dict[str, Any]] = []
@@ -952,6 +980,7 @@ def main() -> None:
 			log_interval=max(1, args.log_interval),
 		)
 		val_loss, val_nm, val_parts = evaluate(model, action_head, val_loader, device, criterion, lambda_action_cls)
+		selection_score, selection_mode = compute_checkpoint_selection_score(val_nm, val_parts, checkpoint_cfg)
 
 		elapsed = time.time() - start_time
 		ep_time = elapsed - prev_elapsed
@@ -963,6 +992,7 @@ def main() -> None:
 			"batch_div_lambda": float(current_batch_div_lambda),
 			"inter_div_lambda": float(current_inter_div_lambda),
 			"intra_div_lambda": float(current_intra_div_lambda),
+			"selection_score": float(selection_score),
 			"train_loss": float(train_loss),
 			"val_loss": float(val_loss),
 			"val_nmpjpe": float(val_nm),
@@ -1021,6 +1051,7 @@ def main() -> None:
 			"[epoch_summary] "
 			f"epoch={ep}/{epochs} time_epoch={ep_time:.1f}s elapsed={elapsed:.1f}s eta={eta:.1f}s "
 			f"lambda_batch_div={current_batch_div_lambda:.3f} lambda_inter_div={current_inter_div_lambda:.3f} lambda_intra_div={current_intra_div_lambda:.3f} "
+			f"selection_mode={selection_mode} selection_score={selection_score:.6f} "
 			f"train_loss={train_loss:.6f} val_loss={val_loss:.6f} val_nmpjpe={val_nm:.6f} "
 			f"train_pose={train_stats['pose_loss_mean']:.6f} train_rel={train_stats['rel_loss_mean']:.6f} train_dist={train_stats['dist_loss_mean']:.6f} train_dir={train_stats['dir_loss_mean']:.6f} train_var={train_stats['var_loss_mean']:.6f} train_batch_div={train_stats['batch_div_loss_mean']:.6f} train_inter_div={train_stats['inter_div_loss_mean']:.6f} train_intra_div={train_stats['intra_div_loss_mean']:.6f} "
 			f"val_pose={val_parts['pose_loss']:.6f} val_rel={val_parts['rel_loss']:.6f} val_dist={val_parts['dist_loss']:.6f} val_dir={val_parts['dir_loss']:.6f} val_var={val_parts['var_loss']:.6f} val_batch_div={val_parts['batch_div_loss']:.6f} val_inter_div={val_parts['inter_div_loss']:.6f} val_intra_div={val_parts['intra_div_loss']:.6f} "
@@ -1049,7 +1080,8 @@ def main() -> None:
 		)
 		logger.log(f"[ckpt] saved_last path={last_ckpt_path} epoch={ep}", always=True)
 
-		if val_nm < best_val:
+		if selection_score > best_selection_score:
+			best_selection_score = selection_score
 			best_val = val_nm
 			best_epoch = ep
 			save_checkpoint(
@@ -1060,9 +1092,17 @@ def main() -> None:
 				cfg=cfg,
 				extra_modules={"action_head": action_head} if action_head is not None else None,
 			)
-			logger.log(f"[ckpt] saved path={ckpt_path} epoch={ep} best_val_nmpjpe={best_val:.6f}", always=True)
+			logger.log(
+				f"[ckpt] saved path={ckpt_path} epoch={ep} best_selection_score={best_selection_score:.6f} "
+				f"val_nmpjpe={best_val:.6f}",
+				always=True,
+			)
 		else:
-			logger.log(f"[ckpt] no_improve best_epoch={best_epoch} best_val_nmpjpe={best_val:.6f}", always=True)
+			logger.log(
+				f"[ckpt] no_improve best_epoch={best_epoch} best_selection_score={best_selection_score:.6f} "
+				f"best_val_nmpjpe={best_val:.6f}",
+				always=True,
+			)
 
 	load_checkpoint(
 		ckpt_path,

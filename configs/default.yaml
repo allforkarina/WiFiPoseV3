@@ -139,6 +139,12 @@ checkpoint:
   save_interval_epochs: 1
   resume: false
   resume_checkpoint: ""
+  selection:
+    mode: "diversity_first"         # accuracy | diversity_first
+    pair_ratio_weight: 1.0
+    std_ratio_weight: 0.35
+    inter_pair_ratio_weight: 0.15
+    nmpjpe_penalty: 0.02
 
 logging:
   use_wandb: false
