@@ -66,6 +66,8 @@ class PoseStructureLoss(nn.Module):
 		lambda_dir: float = 0.2,
 		lambda_var: float = 0.1,
 		lambda_batch_div: float = 0.0,
+		lambda_inter_div: float = 0.0,
+		lambda_intra_div: float = 0.0,
 		preserve_ratio: float = 0.6,
 		huber_beta: float = 0.05,
 	) -> None:
@@ -76,10 +78,38 @@ class PoseStructureLoss(nn.Module):
 		self.lambda_dir = float(lambda_dir)
 		self.lambda_var = float(lambda_var)
 		self.lambda_batch_div = float(lambda_batch_div)
+		self.lambda_inter_div = float(lambda_inter_div)
+		self.lambda_intra_div = float(lambda_intra_div)
 		self.preserve_ratio = float(preserve_ratio)
 		self.huber_beta = float(huber_beta)
 
-	def forward(self, pred: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+	def _pair_diversity_terms(
+		self,
+		pred_sample_dist: torch.Tensor,
+		target_sample_dist: torch.Tensor,
+		mask: torch.Tensor,
+	) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+		if bool(mask.any()):
+			pred_pairs = pred_sample_dist[mask]
+			target_pairs = target_sample_dist[mask]
+			target_pair_mean = target_pairs.mean().clamp(min=1e-6)
+			div_loss = F.smooth_l1_loss(
+				pred_pairs / target_pair_mean,
+				target_pairs / target_pair_mean,
+				beta=self.huber_beta,
+			)
+			pair_ratio = pred_pairs.mean() / target_pairs.mean().clamp(min=1e-8)
+			return div_loss, pred_pairs.mean(), target_pairs.mean(), pair_ratio
+
+		zero = pred_sample_dist.new_zeros(())
+		return zero, zero, zero, zero
+
+	def forward(
+		self,
+		pred: torch.Tensor,
+		target: torch.Tensor,
+		action_targets: torch.Tensor | None = None,
+	) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
 		pose_loss = F.smooth_l1_loss(pred, target, beta=self.huber_beta)
 
 		pred_rel = pred.unsqueeze(2) - pred.unsqueeze(1)
@@ -107,20 +137,47 @@ class PoseStructureLoss(nn.Module):
 			pred_sample_dist = torch.cdist(pred_flat, pred_flat, p=2)
 			target_sample_dist = torch.cdist(target_flat, target_flat, p=2)
 			off_diag = ~torch.eye(pred.size(0), dtype=torch.bool, device=pred.device)
-			pred_pairs = pred_sample_dist[off_diag]
-			target_pairs = target_sample_dist[off_diag]
-			target_pair_mean = target_pairs.mean().clamp(min=1e-6)
-			batch_div_loss = F.smooth_l1_loss(
-				pred_pairs / target_pair_mean,
-				target_pairs / target_pair_mean,
-				beta=self.huber_beta,
+			batch_div_loss, pred_pair_mean, target_pair_mean, pair_dist_ratio = self._pair_diversity_terms(
+				pred_sample_dist,
+				target_sample_dist,
+				off_diag,
 			)
-			pair_dist_ratio = pred_pairs.mean() / target_pairs.mean().clamp(min=1e-8)
+			if action_targets is not None and action_targets.numel() == pred.size(0):
+				same_action = action_targets.unsqueeze(0) == action_targets.unsqueeze(1)
+				inter_mask = off_diag & (~same_action)
+				intra_mask = off_diag & same_action
+				inter_div_loss, pred_inter_mean, target_inter_mean, inter_pair_ratio = self._pair_diversity_terms(
+					pred_sample_dist,
+					target_sample_dist,
+					inter_mask,
+				)
+				intra_div_loss, pred_intra_mean, target_intra_mean, intra_pair_ratio = self._pair_diversity_terms(
+					pred_sample_dist,
+					target_sample_dist,
+					intra_mask,
+				)
+			else:
+				inter_div_loss = pred_flat.new_zeros(())
+				intra_div_loss = pred_flat.new_zeros(())
+				pred_inter_mean = pred_flat.new_zeros(())
+				target_inter_mean = pred_flat.new_zeros(())
+				inter_pair_ratio = pred_flat.new_zeros(())
+				pred_intra_mean = pred_flat.new_zeros(())
+				target_intra_mean = pred_flat.new_zeros(())
+				intra_pair_ratio = pred_flat.new_zeros(())
 		else:
 			batch_div_loss = pred_flat.new_zeros(())
-			target_pairs = pred_flat.new_zeros((1,))
-			pred_pairs = pred_flat.new_zeros((1,))
+			pred_pair_mean = pred_flat.new_zeros(())
+			target_pair_mean = pred_flat.new_zeros(())
 			pair_dist_ratio = pred_flat.new_zeros(())
+			inter_div_loss = pred_flat.new_zeros(())
+			intra_div_loss = pred_flat.new_zeros(())
+			pred_inter_mean = pred_flat.new_zeros(())
+			target_inter_mean = pred_flat.new_zeros(())
+			inter_pair_ratio = pred_flat.new_zeros(())
+			pred_intra_mean = pred_flat.new_zeros(())
+			target_intra_mean = pred_flat.new_zeros(())
+			intra_pair_ratio = pred_flat.new_zeros(())
 
 		total = (
 			self.lambda_pose * pose_loss
@@ -129,6 +186,8 @@ class PoseStructureLoss(nn.Module):
 			+ self.lambda_dir * dir_loss
 			+ self.lambda_var * var_loss
 			+ self.lambda_batch_div * batch_div_loss
+			+ self.lambda_inter_div * inter_div_loss
+			+ self.lambda_intra_div * intra_div_loss
 		)
 		parts = {
 			"pose_loss": pose_loss.detach(),
@@ -137,12 +196,20 @@ class PoseStructureLoss(nn.Module):
 			"dir_loss": dir_loss.detach(),
 			"var_loss": var_loss.detach(),
 			"batch_div_loss": batch_div_loss.detach(),
+			"inter_div_loss": inter_div_loss.detach(),
+			"intra_div_loss": intra_div_loss.detach(),
 			"pred_std_mean": pred_std.mean().detach(),
 			"target_std_mean": target_std.mean().detach(),
 			"std_ratio": std_ratio.detach(),
-			"pred_pair_dist_mean": pred_pairs.mean().detach(),
-			"target_pair_dist_mean": target_pairs.mean().detach(),
+			"pred_pair_dist_mean": pred_pair_mean.detach(),
+			"target_pair_dist_mean": target_pair_mean.detach(),
 			"pair_dist_ratio": pair_dist_ratio.detach(),
+			"pred_inter_pair_dist_mean": pred_inter_mean.detach(),
+			"target_inter_pair_dist_mean": target_inter_mean.detach(),
+			"inter_pair_dist_ratio": inter_pair_ratio.detach(),
+			"pred_intra_pair_dist_mean": pred_intra_mean.detach(),
+			"target_intra_pair_dist_mean": target_intra_mean.detach(),
+			"intra_pair_dist_ratio": intra_pair_ratio.detach(),
 			"total_loss": total.detach(),
 		}
 		return total, parts
@@ -178,9 +245,15 @@ def resolve_data_roots(cfg: Dict[str, Any], aoa_override: str | None, labels_ove
 	return aoa_root, labels_root
 
 
-def resolve_batch_div_lambda(loss_cfg: Dict[str, Any], epoch: int, num_epochs: int) -> float:
-	base_value = float(loss_cfg.get("lambda_batch_div", 0.0))
-	schedule_cfg = loss_cfg.get("batch_div_schedule", {})
+def resolve_scheduled_lambda(
+	loss_cfg: Dict[str, Any],
+	base_key: str,
+	schedule_key: str,
+	epoch: int,
+	num_epochs: int,
+) -> float:
+	base_value = float(loss_cfg.get(base_key, 0.0))
+	schedule_cfg = loss_cfg.get(schedule_key, {})
 	if not isinstance(schedule_cfg, dict) or not bool(schedule_cfg.get("enable", False)):
 		return base_value
 
@@ -425,12 +498,20 @@ def train_one_epoch(
 	running_dir_loss = 0.0
 	running_var_loss = 0.0
 	running_batch_div_loss = 0.0
+	running_inter_div_loss = 0.0
+	running_intra_div_loss = 0.0
 	running_pred_std = 0.0
 	running_target_std = 0.0
 	running_std_ratio = 0.0
 	running_pred_pair_dist = 0.0
 	running_target_pair_dist = 0.0
 	running_pair_dist_ratio = 0.0
+	running_pred_inter_pair_dist = 0.0
+	running_target_inter_pair_dist = 0.0
+	running_inter_pair_dist_ratio = 0.0
+	running_pred_intra_pair_dist = 0.0
+	running_target_intra_pair_dist = 0.0
+	running_intra_pair_dist_ratio = 0.0
 	running_action_cls_loss = 0.0
 	running_action_acc = 0.0
 	grad_norms: list[float] = []
@@ -443,11 +524,11 @@ def train_one_epoch(
 	for step, (x, y, meta) in enumerate(loader):
 		x = x.to(device)
 		y = y.to(device)
+		action_targets = build_action_targets(meta, device)
 		optimizer.zero_grad()
 		pred, features = forward_pose_with_features(model, x)
-		loss, loss_parts = criterion(pred, y)
+		loss, loss_parts = criterion(pred, y, action_targets=action_targets)
 		if action_head is not None:
-			action_targets = build_action_targets(meta, device)
 			action_logits = action_head(features)
 			action_cls_loss = F.cross_entropy(action_logits, action_targets)
 			action_acc = (action_logits.argmax(dim=1) == action_targets).float().mean()
@@ -477,12 +558,20 @@ def train_one_epoch(
 		running_dir_loss += float(loss_parts["dir_loss"].item())
 		running_var_loss += float(loss_parts["var_loss"].item())
 		running_batch_div_loss += float(loss_parts["batch_div_loss"].item())
+		running_inter_div_loss += float(loss_parts["inter_div_loss"].item())
+		running_intra_div_loss += float(loss_parts["intra_div_loss"].item())
 		running_pred_std += float(loss_parts["pred_std_mean"].item())
 		running_target_std += float(loss_parts["target_std_mean"].item())
 		running_std_ratio += float(loss_parts["std_ratio"].item())
 		running_pred_pair_dist += float(loss_parts["pred_pair_dist_mean"].item())
 		running_target_pair_dist += float(loss_parts["target_pair_dist_mean"].item())
 		running_pair_dist_ratio += float(loss_parts["pair_dist_ratio"].item())
+		running_pred_inter_pair_dist += float(loss_parts["pred_inter_pair_dist_mean"].item())
+		running_target_inter_pair_dist += float(loss_parts["target_inter_pair_dist_mean"].item())
+		running_inter_pair_dist_ratio += float(loss_parts["inter_pair_dist_ratio"].item())
+		running_pred_intra_pair_dist += float(loss_parts["pred_intra_pair_dist_mean"].item())
+		running_target_intra_pair_dist += float(loss_parts["target_intra_pair_dist_mean"].item())
+		running_intra_pair_dist_ratio += float(loss_parts["intra_pair_dist_ratio"].item())
 		running_action_cls_loss += float(action_cls_loss.item())
 		running_action_acc += float(action_acc.item())
 		actions_seen.update(extract_meta_field(meta, "action"))
@@ -501,12 +590,20 @@ def train_one_epoch(
 		"dir_loss_mean": running_dir_loss / max(1, total_steps),
 		"var_loss_mean": running_var_loss / max(1, total_steps),
 		"batch_div_loss_mean": running_batch_div_loss / max(1, total_steps),
+		"inter_div_loss_mean": running_inter_div_loss / max(1, total_steps),
+		"intra_div_loss_mean": running_intra_div_loss / max(1, total_steps),
 		"pred_std_mean": running_pred_std / max(1, total_steps),
 		"target_std_mean": running_target_std / max(1, total_steps),
 		"std_ratio_mean": running_std_ratio / max(1, total_steps),
 		"pred_pair_dist_mean": running_pred_pair_dist / max(1, total_steps),
 		"target_pair_dist_mean": running_target_pair_dist / max(1, total_steps),
 		"pair_dist_ratio_mean": running_pair_dist_ratio / max(1, total_steps),
+		"pred_inter_pair_dist_mean": running_pred_inter_pair_dist / max(1, total_steps),
+		"target_inter_pair_dist_mean": running_target_inter_pair_dist / max(1, total_steps),
+		"inter_pair_dist_ratio_mean": running_inter_pair_dist_ratio / max(1, total_steps),
+		"pred_intra_pair_dist_mean": running_pred_intra_pair_dist / max(1, total_steps),
+		"target_intra_pair_dist_mean": running_target_intra_pair_dist / max(1, total_steps),
+		"intra_pair_dist_ratio_mean": running_intra_pair_dist_ratio / max(1, total_steps),
 		"action_cls_loss_mean": running_action_cls_loss / max(1, total_steps),
 		"action_acc_mean": running_action_acc / max(1, total_steps),
 		"actions_covered": len([x for x in actions_seen if x]),
@@ -535,22 +632,30 @@ def evaluate(
 	total_dir = 0.0
 	total_var = 0.0
 	total_batch_div = 0.0
+	total_inter_div = 0.0
+	total_intra_div = 0.0
 	total_pred_std = 0.0
 	total_target_std = 0.0
 	total_std_ratio = 0.0
 	total_pred_pair_dist = 0.0
 	total_target_pair_dist = 0.0
 	total_pair_dist_ratio = 0.0
+	total_pred_inter_pair_dist = 0.0
+	total_target_inter_pair_dist = 0.0
+	total_inter_pair_dist_ratio = 0.0
+	total_pred_intra_pair_dist = 0.0
+	total_target_intra_pair_dist = 0.0
+	total_intra_pair_dist_ratio = 0.0
 	total_action_cls = 0.0
 	total_action_acc = 0.0
 	with torch.no_grad():
 		for x, y, meta in loader:
 			x = x.to(device)
 			y = y.to(device)
+			action_targets = build_action_targets(meta, device)
 			pred, features = forward_pose_with_features(model, x)
-			loss, loss_parts = criterion(pred, y)
+			loss, loss_parts = criterion(pred, y, action_targets=action_targets)
 			if action_head is not None:
-				action_targets = build_action_targets(meta, device)
 				action_logits = action_head(features)
 				action_cls_loss = F.cross_entropy(action_logits, action_targets)
 				action_acc = (action_logits.argmax(dim=1) == action_targets).float().mean()
@@ -567,12 +672,20 @@ def evaluate(
 			total_dir += float(loss_parts["dir_loss"].item()) * batch_size
 			total_var += float(loss_parts["var_loss"].item()) * batch_size
 			total_batch_div += float(loss_parts["batch_div_loss"].item()) * batch_size
+			total_inter_div += float(loss_parts["inter_div_loss"].item()) * batch_size
+			total_intra_div += float(loss_parts["intra_div_loss"].item()) * batch_size
 			total_pred_std += float(loss_parts["pred_std_mean"].item()) * batch_size
 			total_target_std += float(loss_parts["target_std_mean"].item()) * batch_size
 			total_std_ratio += float(loss_parts["std_ratio"].item()) * batch_size
 			total_pred_pair_dist += float(loss_parts["pred_pair_dist_mean"].item()) * batch_size
 			total_target_pair_dist += float(loss_parts["target_pair_dist_mean"].item()) * batch_size
 			total_pair_dist_ratio += float(loss_parts["pair_dist_ratio"].item()) * batch_size
+			total_pred_inter_pair_dist += float(loss_parts["pred_inter_pair_dist_mean"].item()) * batch_size
+			total_target_inter_pair_dist += float(loss_parts["target_inter_pair_dist_mean"].item()) * batch_size
+			total_inter_pair_dist_ratio += float(loss_parts["inter_pair_dist_ratio"].item()) * batch_size
+			total_pred_intra_pair_dist += float(loss_parts["pred_intra_pair_dist_mean"].item()) * batch_size
+			total_target_intra_pair_dist += float(loss_parts["target_intra_pair_dist_mean"].item()) * batch_size
+			total_intra_pair_dist_ratio += float(loss_parts["intra_pair_dist_ratio"].item()) * batch_size
 			total_action_cls += float(action_cls_loss.item()) * batch_size
 			total_action_acc += float(action_acc.item()) * batch_size
 			total_err += err.item() * batch_size
@@ -584,12 +697,20 @@ def evaluate(
 		"dir_loss": total_dir / max(1, total_cnt),
 		"var_loss": total_var / max(1, total_cnt),
 		"batch_div_loss": total_batch_div / max(1, total_cnt),
+		"inter_div_loss": total_inter_div / max(1, total_cnt),
+		"intra_div_loss": total_intra_div / max(1, total_cnt),
 		"pred_std_mean": total_pred_std / max(1, total_cnt),
 		"target_std_mean": total_target_std / max(1, total_cnt),
 		"std_ratio": total_std_ratio / max(1, total_cnt),
 		"pred_pair_dist_mean": total_pred_pair_dist / max(1, total_cnt),
 		"target_pair_dist_mean": total_target_pair_dist / max(1, total_cnt),
 		"pair_dist_ratio": total_pair_dist_ratio / max(1, total_cnt),
+		"pred_inter_pair_dist_mean": total_pred_inter_pair_dist / max(1, total_cnt),
+		"target_inter_pair_dist_mean": total_target_inter_pair_dist / max(1, total_cnt),
+		"inter_pair_dist_ratio": total_inter_pair_dist_ratio / max(1, total_cnt),
+		"pred_intra_pair_dist_mean": total_pred_intra_pair_dist / max(1, total_cnt),
+		"target_intra_pair_dist_mean": total_target_intra_pair_dist / max(1, total_cnt),
+		"intra_pair_dist_ratio": total_intra_pair_dist_ratio / max(1, total_cnt),
 		"action_cls_loss": total_action_cls / max(1, total_cnt),
 		"action_acc": total_action_acc / max(1, total_cnt),
 	}
@@ -764,6 +885,8 @@ def main() -> None:
 		lambda_dir=float(loss_cfg.get("lambda_dir", 0.2)),
 		lambda_var=float(loss_cfg.get("lambda_var", 0.1)),
 		lambda_batch_div=float(loss_cfg.get("lambda_batch_div", 0.0)),
+		lambda_inter_div=float(loss_cfg.get("lambda_inter_div", 0.0)),
+		lambda_intra_div=float(loss_cfg.get("lambda_intra_div", 0.0)),
 		preserve_ratio=float(loss_cfg.get("preserve_ratio", 0.6)),
 		huber_beta=float(loss_cfg.get("huber_delta", 0.05)),
 	)
@@ -801,11 +924,17 @@ def main() -> None:
 
 	for epoch in range(start_epoch, epochs):
 		ep = epoch + 1
-		current_batch_div_lambda = resolve_batch_div_lambda(loss_cfg, ep, epochs)
+		current_batch_div_lambda = resolve_scheduled_lambda(loss_cfg, "lambda_batch_div", "batch_div_schedule", ep, epochs)
+		current_inter_div_lambda = resolve_scheduled_lambda(loss_cfg, "lambda_inter_div", "inter_div_schedule", ep, epochs)
+		current_intra_div_lambda = resolve_scheduled_lambda(loss_cfg, "lambda_intra_div", "intra_div_schedule", ep, epochs)
 		criterion.lambda_batch_div = current_batch_div_lambda
+		criterion.lambda_inter_div = current_inter_div_lambda
+		criterion.lambda_intra_div = current_intra_div_lambda
 		logger.log(
 			f"[epoch_start] epoch={ep}/{epochs} train_size={split_stats['train_size']} val_size={split_stats['val_size']} "
-			f"test_size={split_stats['test_size']} lr={lr:.3e} lambda_batch_div={current_batch_div_lambda:.3f}",
+			f"test_size={split_stats['test_size']} lr={lr:.3e} "
+			f"lambda_batch_div={current_batch_div_lambda:.3f} lambda_inter_div={current_inter_div_lambda:.3f} "
+			f"lambda_intra_div={current_intra_div_lambda:.3f}",
 			always=True,
 		)
 		train_loss, train_stats = train_one_epoch(
@@ -832,6 +961,8 @@ def main() -> None:
 		history_row = {
 			"epoch": ep,
 			"batch_div_lambda": float(current_batch_div_lambda),
+			"inter_div_lambda": float(current_inter_div_lambda),
+			"intra_div_lambda": float(current_intra_div_lambda),
 			"train_loss": float(train_loss),
 			"val_loss": float(val_loss),
 			"val_nmpjpe": float(val_nm),
@@ -841,24 +972,40 @@ def main() -> None:
 			"train_dir_loss": float(train_stats["dir_loss_mean"]),
 			"train_var_loss": float(train_stats["var_loss_mean"]),
 			"train_batch_div_loss": float(train_stats["batch_div_loss_mean"]),
+			"train_inter_div_loss": float(train_stats["inter_div_loss_mean"]),
+			"train_intra_div_loss": float(train_stats["intra_div_loss_mean"]),
 			"val_pose_loss": float(val_parts["pose_loss"]),
 			"val_rel_loss": float(val_parts["rel_loss"]),
 			"val_dist_loss": float(val_parts["dist_loss"]),
 			"val_dir_loss": float(val_parts["dir_loss"]),
 			"val_var_loss": float(val_parts["var_loss"]),
 			"val_batch_div_loss": float(val_parts["batch_div_loss"]),
+			"val_inter_div_loss": float(val_parts["inter_div_loss"]),
+			"val_intra_div_loss": float(val_parts["intra_div_loss"]),
 			"train_pred_std_mean": float(train_stats["pred_std_mean"]),
 			"train_target_std_mean": float(train_stats["target_std_mean"]),
 			"train_std_ratio": float(train_stats["std_ratio_mean"]),
 			"train_pred_pair_dist_mean": float(train_stats["pred_pair_dist_mean"]),
 			"train_target_pair_dist_mean": float(train_stats["target_pair_dist_mean"]),
 			"train_pair_dist_ratio": float(train_stats["pair_dist_ratio_mean"]),
+			"train_pred_inter_pair_dist_mean": float(train_stats["pred_inter_pair_dist_mean"]),
+			"train_target_inter_pair_dist_mean": float(train_stats["target_inter_pair_dist_mean"]),
+			"train_inter_pair_dist_ratio": float(train_stats["inter_pair_dist_ratio_mean"]),
+			"train_pred_intra_pair_dist_mean": float(train_stats["pred_intra_pair_dist_mean"]),
+			"train_target_intra_pair_dist_mean": float(train_stats["target_intra_pair_dist_mean"]),
+			"train_intra_pair_dist_ratio": float(train_stats["intra_pair_dist_ratio_mean"]),
 			"val_pred_std_mean": float(val_parts["pred_std_mean"]),
 			"val_target_std_mean": float(val_parts["target_std_mean"]),
 			"val_std_ratio": float(val_parts["std_ratio"]),
 			"val_pred_pair_dist_mean": float(val_parts["pred_pair_dist_mean"]),
 			"val_target_pair_dist_mean": float(val_parts["target_pair_dist_mean"]),
 			"val_pair_dist_ratio": float(val_parts["pair_dist_ratio"]),
+			"val_pred_inter_pair_dist_mean": float(val_parts["pred_inter_pair_dist_mean"]),
+			"val_target_inter_pair_dist_mean": float(val_parts["target_inter_pair_dist_mean"]),
+			"val_inter_pair_dist_ratio": float(val_parts["inter_pair_dist_ratio"]),
+			"val_pred_intra_pair_dist_mean": float(val_parts["pred_intra_pair_dist_mean"]),
+			"val_target_intra_pair_dist_mean": float(val_parts["target_intra_pair_dist_mean"]),
+			"val_intra_pair_dist_ratio": float(val_parts["intra_pair_dist_ratio"]),
 			"train_action_cls_loss": float(train_stats["action_cls_loss_mean"]),
 			"train_action_acc": float(train_stats["action_acc_mean"]),
 			"val_action_cls_loss": float(val_parts["action_cls_loss"]),
@@ -873,13 +1020,18 @@ def main() -> None:
 		logger.log(
 			"[epoch_summary] "
 			f"epoch={ep}/{epochs} time_epoch={ep_time:.1f}s elapsed={elapsed:.1f}s eta={eta:.1f}s "
-			f"lambda_batch_div={current_batch_div_lambda:.3f} train_loss={train_loss:.6f} val_loss={val_loss:.6f} val_nmpjpe={val_nm:.6f} "
-			f"train_pose={train_stats['pose_loss_mean']:.6f} train_rel={train_stats['rel_loss_mean']:.6f} train_dist={train_stats['dist_loss_mean']:.6f} train_dir={train_stats['dir_loss_mean']:.6f} train_var={train_stats['var_loss_mean']:.6f} train_batch_div={train_stats['batch_div_loss_mean']:.6f} "
-			f"val_pose={val_parts['pose_loss']:.6f} val_rel={val_parts['rel_loss']:.6f} val_dist={val_parts['dist_loss']:.6f} val_dir={val_parts['dir_loss']:.6f} val_var={val_parts['var_loss']:.6f} val_batch_div={val_parts['batch_div_loss']:.6f} "
+			f"lambda_batch_div={current_batch_div_lambda:.3f} lambda_inter_div={current_inter_div_lambda:.3f} lambda_intra_div={current_intra_div_lambda:.3f} "
+			f"train_loss={train_loss:.6f} val_loss={val_loss:.6f} val_nmpjpe={val_nm:.6f} "
+			f"train_pose={train_stats['pose_loss_mean']:.6f} train_rel={train_stats['rel_loss_mean']:.6f} train_dist={train_stats['dist_loss_mean']:.6f} train_dir={train_stats['dir_loss_mean']:.6f} train_var={train_stats['var_loss_mean']:.6f} train_batch_div={train_stats['batch_div_loss_mean']:.6f} train_inter_div={train_stats['inter_div_loss_mean']:.6f} train_intra_div={train_stats['intra_div_loss_mean']:.6f} "
+			f"val_pose={val_parts['pose_loss']:.6f} val_rel={val_parts['rel_loss']:.6f} val_dist={val_parts['dist_loss']:.6f} val_dir={val_parts['dir_loss']:.6f} val_var={val_parts['var_loss']:.6f} val_batch_div={val_parts['batch_div_loss']:.6f} val_inter_div={val_parts['inter_div_loss']:.6f} val_intra_div={val_parts['intra_div_loss']:.6f} "
 			f"train_std={train_stats['pred_std_mean']:.6f}/{train_stats['target_std_mean']:.6f} train_std_ratio={train_stats['std_ratio_mean']:.6f} "
 			f"val_std={val_parts['pred_std_mean']:.6f}/{val_parts['target_std_mean']:.6f} val_std_ratio={val_parts['std_ratio']:.6f} "
 			f"train_pair_dist={train_stats['pred_pair_dist_mean']:.6f}/{train_stats['target_pair_dist_mean']:.6f} train_pair_ratio={train_stats['pair_dist_ratio_mean']:.6f} "
 			f"val_pair_dist={val_parts['pred_pair_dist_mean']:.6f}/{val_parts['target_pair_dist_mean']:.6f} val_pair_ratio={val_parts['pair_dist_ratio']:.6f} "
+			f"train_inter_pair={train_stats['pred_inter_pair_dist_mean']:.6f}/{train_stats['target_inter_pair_dist_mean']:.6f} train_inter_ratio={train_stats['inter_pair_dist_ratio_mean']:.6f} "
+			f"val_inter_pair={val_parts['pred_inter_pair_dist_mean']:.6f}/{val_parts['target_inter_pair_dist_mean']:.6f} val_inter_ratio={val_parts['inter_pair_dist_ratio']:.6f} "
+			f"train_intra_pair={train_stats['pred_intra_pair_dist_mean']:.6f}/{train_stats['target_intra_pair_dist_mean']:.6f} train_intra_ratio={train_stats['intra_pair_dist_ratio_mean']:.6f} "
+			f"val_intra_pair={val_parts['pred_intra_pair_dist_mean']:.6f}/{val_parts['target_intra_pair_dist_mean']:.6f} val_intra_ratio={val_parts['intra_pair_dist_ratio']:.6f} "
 			f"train_action_cls={train_stats['action_cls_loss_mean']:.6f} train_action_acc={train_stats['action_acc_mean']:.3f} "
 			f"val_action_cls={val_parts['action_cls_loss']:.6f} val_action_acc={val_parts['action_acc']:.3f} "
 			f"grad_norm_mean={train_stats['grad_norm_mean']:.3f} "
@@ -925,8 +1077,11 @@ def main() -> None:
 		f"[test_summary] best_epoch={best_epoch} test_loss={test_loss:.6f} test_nmpjpe={test_nm:.6f} "
 		f"test_pose={test_parts['pose_loss']:.6f} test_rel={test_parts['rel_loss']:.6f} test_dist={test_parts['dist_loss']:.6f} "
 		f"test_dir={test_parts['dir_loss']:.6f} test_var={test_parts['var_loss']:.6f} test_batch_div={test_parts['batch_div_loss']:.6f} "
+		f"test_inter_div={test_parts['inter_div_loss']:.6f} test_intra_div={test_parts['intra_div_loss']:.6f} "
 		f"test_std={test_parts['pred_std_mean']:.6f}/{test_parts['target_std_mean']:.6f} test_std_ratio={test_parts['std_ratio']:.6f} "
 		f"test_pair_dist={test_parts['pred_pair_dist_mean']:.6f}/{test_parts['target_pair_dist_mean']:.6f} test_pair_ratio={test_parts['pair_dist_ratio']:.6f} "
+		f"test_inter_pair={test_parts['pred_inter_pair_dist_mean']:.6f}/{test_parts['target_inter_pair_dist_mean']:.6f} test_inter_ratio={test_parts['inter_pair_dist_ratio']:.6f} "
+		f"test_intra_pair={test_parts['pred_intra_pair_dist_mean']:.6f}/{test_parts['target_intra_pair_dist_mean']:.6f} test_intra_ratio={test_parts['intra_pair_dist_ratio']:.6f} "
 		f"test_action_cls={test_parts['action_cls_loss']:.6f} test_action_acc={test_parts['action_acc']:.3f}",
 		always=True,
 	)
