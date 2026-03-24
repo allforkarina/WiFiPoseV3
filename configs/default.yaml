@@ -84,7 +84,14 @@ loss:
   lambda_sym: 0.1                   # 对称性
   lambda_reg: 0.01                  # 防塌缩 soft constraint
   lambda_var: 0.0                   # 旧的 batch variance 约束默认关闭，避免与跨样本差异约束冲突
-  lambda_batch_div: 0.3             # 直接保持 batch 内样本间姿态差异，抑制平均姿态塌缩
+  lambda_batch_div: 0.3             # batch_div 的基准值；若启用 schedule，会作为默认起点
+  batch_div_schedule:
+    enable: true
+    name: "rise_fall"               # fixed | linear | rise_fall
+    start: 0.3                      # 前期保持稳定回归
+    peak: 0.6                       # 中期增强姿态差异，进一步压制平均姿态
+    end: 0.4                        # 后期回落一点，避免只追多样性而损失贴合度
+    peak_epoch_ratio: 0.4
   preserve_ratio: 0.6               # pred std 至少保留 target std 的该比例
   huber_delta: 1.0
 

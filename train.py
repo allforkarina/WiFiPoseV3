@@ -178,6 +178,36 @@ def resolve_data_roots(cfg: Dict[str, Any], aoa_override: str | None, labels_ove
 	return aoa_root, labels_root
 
 
+def resolve_batch_div_lambda(loss_cfg: Dict[str, Any], epoch: int, num_epochs: int) -> float:
+	base_value = float(loss_cfg.get("lambda_batch_div", 0.0))
+	schedule_cfg = loss_cfg.get("batch_div_schedule", {})
+	if not isinstance(schedule_cfg, dict) or not bool(schedule_cfg.get("enable", False)):
+		return base_value
+
+	name = str(schedule_cfg.get("name", "fixed")).lower()
+	if num_epochs <= 1 or name == "fixed":
+		return float(schedule_cfg.get("start", base_value))
+
+	start = float(schedule_cfg.get("start", base_value))
+	peak = float(schedule_cfg.get("peak", base_value))
+	end = float(schedule_cfg.get("end", peak))
+	progress = 0.0 if num_epochs <= 1 else (epoch - 1) / max(1, num_epochs - 1)
+
+	if name == "linear":
+		return start + (end - start) * progress
+
+	if name == "rise_fall":
+		peak_ratio = float(schedule_cfg.get("peak_epoch_ratio", 0.4))
+		peak_ratio = min(max(peak_ratio, 1e-6), 1.0)
+		if progress <= peak_ratio:
+			local_progress = progress / peak_ratio
+			return start + (peak - start) * local_progress
+		local_progress = (progress - peak_ratio) / max(1e-6, 1.0 - peak_ratio)
+		return peak + (end - peak) * local_progress
+
+	return base_value
+
+
 def extract_meta_field(meta: Any, key: str) -> list[str]:
 	if isinstance(meta, dict):
 		value = meta.get(key, [])
@@ -751,6 +781,7 @@ def main() -> None:
 	ckpt_path = Path(args.checkpoint)
 	if not ckpt_path.is_absolute():
 		ckpt_path = PROJECT_ROOT / ckpt_path
+	last_ckpt_path = ckpt_path.with_name(f"{ckpt_path.stem}_last{ckpt_path.suffix}")
 	start_epoch = 0
 	if args.resume and ckpt_path.exists():
 		start_epoch = load_checkpoint(
@@ -770,9 +801,11 @@ def main() -> None:
 
 	for epoch in range(start_epoch, epochs):
 		ep = epoch + 1
+		current_batch_div_lambda = resolve_batch_div_lambda(loss_cfg, ep, epochs)
+		criterion.lambda_batch_div = current_batch_div_lambda
 		logger.log(
 			f"[epoch_start] epoch={ep}/{epochs} train_size={split_stats['train_size']} val_size={split_stats['val_size']} "
-			f"test_size={split_stats['test_size']} lr={lr:.3e}",
+			f"test_size={split_stats['test_size']} lr={lr:.3e} lambda_batch_div={current_batch_div_lambda:.3f}",
 			always=True,
 		)
 		train_loss, train_stats = train_one_epoch(
@@ -798,6 +831,7 @@ def main() -> None:
 		eta = max(0.0, eta_total - elapsed)
 		history_row = {
 			"epoch": ep,
+			"batch_div_lambda": float(current_batch_div_lambda),
 			"train_loss": float(train_loss),
 			"val_loss": float(val_loss),
 			"val_nmpjpe": float(val_nm),
@@ -839,7 +873,7 @@ def main() -> None:
 		logger.log(
 			"[epoch_summary] "
 			f"epoch={ep}/{epochs} time_epoch={ep_time:.1f}s elapsed={elapsed:.1f}s eta={eta:.1f}s "
-			f"train_loss={train_loss:.6f} val_loss={val_loss:.6f} val_nmpjpe={val_nm:.6f} "
+			f"lambda_batch_div={current_batch_div_lambda:.3f} train_loss={train_loss:.6f} val_loss={val_loss:.6f} val_nmpjpe={val_nm:.6f} "
 			f"train_pose={train_stats['pose_loss_mean']:.6f} train_rel={train_stats['rel_loss_mean']:.6f} train_dist={train_stats['dist_loss_mean']:.6f} train_dir={train_stats['dir_loss_mean']:.6f} train_var={train_stats['var_loss_mean']:.6f} train_batch_div={train_stats['batch_div_loss_mean']:.6f} "
 			f"val_pose={val_parts['pose_loss']:.6f} val_rel={val_parts['rel_loss']:.6f} val_dist={val_parts['dist_loss']:.6f} val_dir={val_parts['dir_loss']:.6f} val_var={val_parts['var_loss']:.6f} val_batch_div={val_parts['batch_div_loss']:.6f} "
 			f"train_std={train_stats['pred_std_mean']:.6f}/{train_stats['target_std_mean']:.6f} train_std_ratio={train_stats['std_ratio_mean']:.6f} "
@@ -853,6 +887,15 @@ def main() -> None:
 			f"actions_covered={train_stats['actions_covered']} envs_covered={train_stats['envs_covered']}",
 			always=True,
 		)
+		save_checkpoint(
+			last_ckpt_path,
+			model,
+			optimizer,
+			epoch=ep,
+			cfg=cfg,
+			extra_modules={"action_head": action_head} if action_head is not None else None,
+		)
+		logger.log(f"[ckpt] saved_last path={last_ckpt_path} epoch={ep}", always=True)
 
 		if val_nm < best_val:
 			best_val = val_nm
