@@ -29,11 +29,19 @@ class AOASampleDataset(Dataset):
     Each item is a single frame: (X: torch.Tensor (1,181), Y: torch.Tensor (17,2), meta: dict).
     """
 
-    def __init__(self, aoa_root: str | Path, labels_root: str | Path, transform=None, window_size: int = 1):
+    def __init__(
+        self,
+        aoa_root: str | Path,
+        labels_root: str | Path,
+        transform=None,
+        window_size: int = 1,
+        normalize_mode: str = "pelvis_torso",
+    ):
         self.aoa_root = Path(aoa_root)
         self.labels_root = Path(labels_root)
         self.transform = transform
         self.window_size = max(1, int(window_size))
+        self.normalize_mode = str(normalize_mode).strip().lower() or "pelvis_torso"
         if self.window_size % 2 == 0:
             self.window_size += 1
         self.window_radius = self.window_size // 2
@@ -73,15 +81,23 @@ class AOASampleDataset(Dataset):
         return aoa.astype(np.float32)
 
     @staticmethod
-    def _normalize_pose(label: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def _normalize_pose(label: np.ndarray, normalize_mode: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         pose = np.asarray(label, dtype=np.float32).reshape(17, 2)
-        pelvis = 0.5 * (pose[LEFT_HIP] + pose[RIGHT_HIP])
-        shoulder_center = 0.5 * (pose[LEFT_SHOULDER] + pose[RIGHT_SHOULDER])
-        center = pelvis.reshape(1, 2)
-        centered = pose - center
+        mode = str(normalize_mode).strip().lower()
+        if mode == "mean_rms":
+            center = pose.mean(axis=0, keepdims=True)
+            centered = pose - center
+            scale = float(np.sqrt(np.mean(np.sum(centered ** 2, axis=1))))
+        elif mode == "pelvis_torso":
+            pelvis = 0.5 * (pose[LEFT_HIP] + pose[RIGHT_HIP])
+            shoulder_center = 0.5 * (pose[LEFT_SHOULDER] + pose[RIGHT_SHOULDER])
+            center = pelvis.reshape(1, 2)
+            centered = pose - center
+            torso_vec = shoulder_center - pelvis
+            scale = float(np.linalg.norm(torso_vec))
+        else:
+            raise ValueError(f"Unsupported normalize_mode: {normalize_mode}")
 
-        torso_vec = shoulder_center - pelvis
-        scale = float(np.linalg.norm(torso_vec))
         if scale < 1e-6:
             rms_scale = float(np.sqrt(np.mean(np.sum(centered ** 2, axis=1))))
             scale = rms_scale if rms_scale >= 1e-6 else 1.0
@@ -135,7 +151,7 @@ class AOASampleDataset(Dataset):
         label = np.load(label_path).astype(np.float32)
 
         X = aoa
-        Y, pose_center, pose_scale = self._normalize_pose(label)
+        Y, pose_center, pose_scale = self._normalize_pose(label, self.normalize_mode)
 
         if self.transform:
             X, Y = self.transform(X, Y)
@@ -150,6 +166,7 @@ class AOASampleDataset(Dataset):
             'label_path': str(label_path),
             'pose_center': pose_center,
             'pose_scale': pose_scale,
+            'normalize_mode': self.normalize_mode,
         }
 
         return torch.from_numpy(X).float(), torch.from_numpy(Y).float(), meta

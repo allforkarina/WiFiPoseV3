@@ -245,6 +245,39 @@ def resolve_data_roots(cfg: Dict[str, Any], aoa_override: str | None, labels_ove
 	return aoa_root, labels_root
 
 
+def resolve_normalize_mode(cfg: Dict[str, Any]) -> str:
+	loss_cfg = cfg.get("loss", {})
+	return str(loss_cfg.get("normalize_mode", "pelvis_torso")).strip().lower() or "pelvis_torso"
+
+
+def apply_cli_overrides(cfg: Dict[str, Any], args: argparse.Namespace) -> None:
+	loss_cfg = cfg.setdefault("loss", {})
+	checkpoint_cfg = cfg.setdefault("checkpoint", {})
+	selection_cfg = checkpoint_cfg.setdefault("selection", {})
+	logging_cfg = cfg.setdefault("logging", {})
+
+	if args.normalize_mode is not None:
+		loss_cfg["normalize_mode"] = args.normalize_mode
+	if args.lambda_var is not None:
+		loss_cfg["lambda_var"] = float(args.lambda_var)
+	if args.lambda_batch_div is not None:
+		loss_cfg["lambda_batch_div"] = float(args.lambda_batch_div)
+	if args.lambda_inter_div is not None:
+		loss_cfg["lambda_inter_div"] = float(args.lambda_inter_div)
+	if args.lambda_intra_div is not None:
+		loss_cfg["lambda_intra_div"] = float(args.lambda_intra_div)
+	if bool(args.disable_batch_div_schedule):
+		loss_cfg["batch_div_schedule"] = {"enable": False}
+	if bool(args.disable_inter_div_schedule):
+		loss_cfg["inter_div_schedule"] = {"enable": False}
+	if bool(args.disable_intra_div_schedule):
+		loss_cfg["intra_div_schedule"] = {"enable": False}
+	if args.selection_mode is not None:
+		selection_cfg["mode"] = args.selection_mode
+	if args.experiment_name:
+		logging_cfg["run_name"] = args.experiment_name
+
+
 def resolve_scheduled_lambda(
 	loss_cfg: Dict[str, Any],
 	base_key: str,
@@ -390,7 +423,12 @@ def build_dataloaders(
 	test_env: str,
 	window_size: int,
 ) -> tuple[DataLoader, DataLoader, DataLoader, dict[str, Any]]:
-	ds = AOASampleDataset(aoa_root=aoa_root, labels_root=labels_root, window_size=window_size)
+	ds = AOASampleDataset(
+		aoa_root=aoa_root,
+		labels_root=labels_root,
+		window_size=window_size,
+		normalize_mode=resolve_normalize_mode(cfg),
+	)
 	if len(ds) == 0:
 		raise RuntimeError(f"Dataset is empty. aoa_root={aoa_root} labels_root={labels_root}")
 
@@ -826,12 +864,23 @@ def main() -> None:
 	parser.add_argument("--epochs", type=int, default=None)
 	parser.add_argument("--model_name", type=str, default=None, help="conv1d_baseline | resnet1d | ms_tcn_pose")
 	parser.add_argument("--window_size", type=int, default=None, help="Temporal AoA window size; even values are rounded up")
+	parser.add_argument("--normalize_mode", type=str, choices=["pelvis_torso", "mean_rms"], default=None)
+	parser.add_argument("--lambda_var", type=float, default=None)
+	parser.add_argument("--lambda_batch_div", type=float, default=None)
+	parser.add_argument("--lambda_inter_div", type=float, default=None)
+	parser.add_argument("--lambda_intra_div", type=float, default=None)
+	parser.add_argument("--selection_mode", type=str, choices=["accuracy", "diversity_first"], default=None)
+	parser.add_argument("--disable_batch_div_schedule", action="store_true")
+	parser.add_argument("--disable_inter_div_schedule", action="store_true")
+	parser.add_argument("--disable_intra_div_schedule", action="store_true")
+	parser.add_argument("--experiment_name", type=str, default=None)
 	args = parser.parse_args()
 
 	config_path = Path(args.config)
 	if not config_path.is_absolute():
 		config_path = PROJECT_ROOT / config_path
 	cfg = load_config(config_path)
+	apply_cli_overrides(cfg, args)
 	train_cfg = cfg.get("train", {})
 	logging_cfg = cfg.get("logging", {})
 	seed = int(train_cfg.get("seed", 42))
@@ -862,10 +911,20 @@ def main() -> None:
 	logger.log(f"[run] config={args.config} device={device}", always=True)
 	logger.log(f"[run] model={model_name}", always=True)
 	logger.log(f"[run] window_size={window_size}", always=True)
+	logger.log(f"[run] normalize_mode={resolve_normalize_mode(cfg)}", always=True)
 	logger.log(f"[run] aoa_cache_root={aoa_root}", always=True)
 	logger.log(f"[run] labels_root={labels_root}", always=True)
 	logger.log(f"[run] val_env={args.val_env} test_env={args.test_env}", always=True)
 	logger.log(f"[run] logs_file={log_path}", always=True)
+	logger.log(
+		"[run] "
+		f"selection_mode={str(cfg.get('checkpoint', {}).get('selection', {}).get('mode', 'accuracy')).lower()} "
+		f"lambda_var={float(cfg.get('loss', {}).get('lambda_var', 0.0)):.3f} "
+		f"lambda_batch_div={float(cfg.get('loss', {}).get('lambda_batch_div', 0.0)):.3f} "
+		f"lambda_inter_div={float(cfg.get('loss', {}).get('lambda_inter_div', 0.0)):.3f} "
+		f"lambda_intra_div={float(cfg.get('loss', {}).get('lambda_intra_div', 0.0)):.3f}",
+		always=True,
+	)
 
 	train_loader, val_loader, test_loader, split_stats = build_dataloaders(
 		cfg=cfg,

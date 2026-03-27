@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from dataloader.aoa_dataset import AOASampleDataset, sample_to_env
-from train import PROJECT_ROOT, build_model, load_config, resolve_data_roots
+from train import PROJECT_ROOT, build_model, load_config, resolve_data_roots, resolve_normalize_mode
 
 
 def parse_args() -> argparse.Namespace:
@@ -22,6 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--labels_root", type=str, default=None)
     parser.add_argument("--model_name", type=str, default=None)
     parser.add_argument("--window_size", type=int, default=None)
+    parser.add_argument("--normalize_mode", type=str, choices=["pelvis_torso", "mean_rms"], default=None)
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--sample_stride", type=int, default=200)
     parser.add_argument("--max_samples", type=int, default=1600)
@@ -169,14 +170,40 @@ def main() -> None:
     cfg = load_config(config_path)
     aoa_root, labels_root = resolve_data_roots(cfg, args.aoa_cache_root, args.labels_root)
     checkpoint_paths = resolve_checkpoint_paths(args)
-    window_size = int(args.window_size if args.window_size is not None else cfg.get("dataset", {}).get("window_size", 1))
-    ds = AOASampleDataset(aoa_root=aoa_root, labels_root=labels_root, window_size=window_size)
-    indices = choose_indices(ds, args.sample_stride, args.max_samples, args.val_env, args.test_env)
     device = torch.device(args.device)
+    dataset_cache: dict[tuple[int, str], AOASampleDataset] = {}
+    default_window_size = int(args.window_size if args.window_size is not None else cfg.get("dataset", {}).get("window_size", 1))
+    default_normalize_mode = args.normalize_mode or resolve_normalize_mode(cfg)
+    default_ds = AOASampleDataset(
+        aoa_root=aoa_root,
+        labels_root=labels_root,
+        window_size=default_window_size,
+        normalize_mode=default_normalize_mode,
+    )
+    dataset_cache[(default_window_size, default_normalize_mode)] = default_ds
+    indices = choose_indices(default_ds, args.sample_stride, args.max_samples, args.val_env, args.test_env)
 
     summary_rows: list[dict[str, Any]] = []
     action_rows: list[dict[str, Any]] = []
     for checkpoint_path in checkpoint_paths:
+        ckpt = torch.load(checkpoint_path, map_location="cpu")
+        ckpt_cfg = ckpt.get("config", cfg)
+        window_size = int(
+            args.window_size
+            if args.window_size is not None
+            else ckpt_cfg.get("dataset", {}).get("window_size", cfg.get("dataset", {}).get("window_size", 1))
+        )
+        normalize_mode = args.normalize_mode or resolve_normalize_mode(ckpt_cfg)
+        dataset_key = (window_size, normalize_mode)
+        ds = dataset_cache.get(dataset_key)
+        if ds is None:
+            ds = AOASampleDataset(
+                aoa_root=aoa_root,
+                labels_root=labels_root,
+                window_size=window_size,
+                normalize_mode=normalize_mode,
+            )
+            dataset_cache[dataset_key] = ds
         summary, grouped = summarize_checkpoint(checkpoint_path, cfg, args, ds, indices, device)
         summary_rows.append(summary)
         action_rows.extend(grouped)

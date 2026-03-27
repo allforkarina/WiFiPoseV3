@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 from dataloader.aoa_dataset import AOASampleDataset
-from train import PROJECT_ROOT, build_model, load_config, nMPJPE, resolve_data_roots
+from train import PROJECT_ROOT, build_model, load_config, nMPJPE, resolve_data_roots, resolve_normalize_mode
 from utils.set_seed import set_seed
 
 
@@ -23,6 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--aoa_cache_root", type=str, default=None)
     parser.add_argument("--labels_root", type=str, default=None)
     parser.add_argument("--window_size", type=int, default=None)
+    parser.add_argument("--normalize_mode", type=str, choices=["pelvis_torso", "mean_rms"], default=None)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="auto")
     return parser.parse_args()
@@ -115,12 +116,18 @@ def main() -> None:
     ckpt = torch.load(checkpoint_path, map_location="cpu")
     ckpt_cfg = ckpt.get("config", cfg)
     window_size = int(args.window_size if args.window_size is not None else ckpt_cfg.get("dataset", {}).get("window_size", cfg.get("dataset", {}).get("window_size", 1)))
+    normalize_mode = args.normalize_mode or resolve_normalize_mode(ckpt_cfg)
 
     model = build_model(ckpt_cfg, device, args.model_name, window_size=window_size)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
 
-    ds = AOASampleDataset(aoa_root=aoa_root, labels_root=labels_root, window_size=window_size)
+    ds = AOASampleDataset(
+        aoa_root=aoa_root,
+        labels_root=labels_root,
+        window_size=window_size,
+        normalize_mode=normalize_mode,
+    )
     action_to_indices = build_action_index(ds)
     rng = random.Random(args.seed)
 
@@ -170,6 +177,7 @@ def main() -> None:
 
     mean_nm = sum(row["nmpjpe"] for row in summary_rows) / max(1, len(summary_rows))
     print(f"[eval] checkpoint={checkpoint_path}")
+    print(f"[eval] normalize_mode={normalize_mode}")
     print(f"[eval] output_dir={out_dir}")
     print(f"[eval] actions={len(summary_rows)} mean_nmpjpe={mean_nm:.6f}")
     print(f"[eval] summary_csv={summary_path}")
