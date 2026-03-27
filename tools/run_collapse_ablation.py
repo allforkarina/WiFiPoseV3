@@ -77,6 +77,20 @@ def build_variants() -> dict[str, list[str]]:
             "--disable_inter_div_schedule",
             "--disable_intra_div_schedule",
         ],
+        "meanrms_interdiv_divsel_actionaux": [
+            "--normalize_mode", "mean_rms",
+            "--lambda_var", "0.0",
+            "--lambda_batch_div", "0.0",
+            "--lambda_inter_div", "0.25",
+            "--lambda_intra_div", "0.0",
+            "--selection_mode", "diversity_first",
+            "--enable_action_aux",
+            "--lambda_action_cls", "0.2",
+            "--action_aux_dropout", "0.1",
+            "--disable_batch_div_schedule",
+            "--disable_inter_div_schedule",
+            "--disable_intra_div_schedule",
+        ],
     }
 
 

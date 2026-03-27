@@ -255,6 +255,7 @@ def apply_cli_overrides(cfg: Dict[str, Any], args: argparse.Namespace) -> None:
 	checkpoint_cfg = cfg.setdefault("checkpoint", {})
 	selection_cfg = checkpoint_cfg.setdefault("selection", {})
 	logging_cfg = cfg.setdefault("logging", {})
+	action_aux_cfg = cfg.setdefault("action_aux", {})
 
 	if args.normalize_mode is not None:
 		loss_cfg["normalize_mode"] = args.normalize_mode
@@ -274,6 +275,12 @@ def apply_cli_overrides(cfg: Dict[str, Any], args: argparse.Namespace) -> None:
 		loss_cfg["intra_div_schedule"] = {"enable": False}
 	if args.selection_mode is not None:
 		selection_cfg["mode"] = args.selection_mode
+	if bool(args.enable_action_aux):
+		action_aux_cfg["enable"] = True
+	if args.lambda_action_cls is not None:
+		action_aux_cfg["lambda_cls"] = float(args.lambda_action_cls)
+	if args.action_aux_dropout is not None:
+		action_aux_cfg["dropout"] = float(args.action_aux_dropout)
 	if args.experiment_name:
 		logging_cfg["run_name"] = args.experiment_name
 
@@ -870,6 +877,9 @@ def main() -> None:
 	parser.add_argument("--lambda_inter_div", type=float, default=None)
 	parser.add_argument("--lambda_intra_div", type=float, default=None)
 	parser.add_argument("--selection_mode", type=str, choices=["accuracy", "diversity_first"], default=None)
+	parser.add_argument("--enable_action_aux", action="store_true")
+	parser.add_argument("--lambda_action_cls", type=float, default=None)
+	parser.add_argument("--action_aux_dropout", type=float, default=None)
 	parser.add_argument("--disable_batch_div_schedule", action="store_true")
 	parser.add_argument("--disable_inter_div_schedule", action="store_true")
 	parser.add_argument("--disable_intra_div_schedule", action="store_true")
