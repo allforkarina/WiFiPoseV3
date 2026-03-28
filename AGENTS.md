@@ -1,29 +1,36 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-`train.py` is the main training entry point. `eval.py` evaluates checkpoints and writes visualizations, and `diagnose_pose_collapse.py` compares saved models for collapse-related failure modes. Core model code lives in `mymodels/`, dataset loading and sampling live in `dataloader/`, preprocessing utilities live in `preprocess/`, and small shared helpers live in `utils/`. Runtime configuration is centralized in `configs/default.yaml`. Keep generated artifacts in `checkpoints/` and `logs/`; repository notes and progress records belong in `docs/`.
+Core entry points are `train.py`, `eval.py`, and `diagnose_pose_collapse.py`. Models live in `mymodels/`, data loading in `dataloader/`, preprocessing in `preprocess/`, and helpers in `utils/`. Runtime configuration is centered in `configs/default.yaml`; notes belong in `docs/`. Generated artifacts should stay in `logs/`, `checkpoints/`, and local `data/` paths.
 
 ## Build, Test, and Development Commands
-Use the repo from the project root with Python on your active environment.
+Use direct Python entry points from the repository root.
 
-```powershell
-python train.py --config configs/default.yaml --verbose
-python eval.py --config configs/default.yaml --checkpoint checkpoints/<model>.pth
-python diagnose_pose_collapse.py --config configs/default.yaml
-python sanity_check/run_sanity_check.py --epochs 5 --device cpu
-python preprocess/aoa_tof_estimation.py --raw_data_root data/dataset --aoa_root data/aoa_cache
-```
-
-The first command trains a pose model, `eval.py` runs checkpoint evaluation and plotting, the diagnose script summarizes collapse metrics, and `run_sanity_check.py` verifies the forward/backward path on synthetic data.
+- `python train.py --config configs/default.yaml --model_name resnet1d --val_env env3 --test_env env4` runs training with the default config.
+- `python eval.py --config configs/default.yaml --checkpoint checkpoints/<run>.pth` evaluates a saved checkpoint and writes plots under `logs/eval/`.
+- `python diagnose_pose_collapse.py --config configs/default.yaml --checkpoint_glob "checkpoints/*.pth"` summarizes collapse-related metrics across checkpoints.
+- `python sanity_check/run_sanity_check.py --epochs 5 --device cpu` performs a smoke test of forward, loss, backward, and optimizer update.
+- `python tools/run_collapse_ablation.py --dry_run` previews ablation commands.
+- `python tools/prune_run_artifacts.py --keep 5` removes old logs and checkpoints.
 
 ## Coding Style & Naming Conventions
-Follow the existing Python style: explicit imports, type hints where practical, and `pathlib.Path` for filesystem work. Use `snake_case` for functions, variables, and config keys; use `PascalCase` for classes. There is no committed formatter or linter config, so keep edits consistent with nearby files. Prefer 4-space indentation in new code, but preserve existing indentation in touched blocks to avoid noisy diffs.
+Follow existing Python style: type hints where practical, small focused functions, and `Path`-based filesystem handling. Use `snake_case` for functions, variables, and CLI flags; use `PascalCase` for classes. Prefer 4-space indentation in new files, but preserve nearby style in touched files. No formatter or linter config is checked in.
 
 ## Testing Guidelines
-There is no dedicated `tests/` package yet. Treat `sanity_check/run_sanity_check.py` as the minimum regression check before opening a PR, and run `eval.py` for model-affecting changes. For data or loss changes, include the exact command used, checkpoint path, and relevant metrics from `logs/` or generated plots.
+This repository relies on script-level validation instead of a formal `pytest` suite. Before opening a PR, training changes should pass `sanity_check/run_sanity_check.py`, and model or data changes should be checked with `eval.py` or `diagnose_pose_collapse.py`. If you add automated tests, place them in `tests/` and name files `test_<module>.py`.
 
 ## Commit & Pull Request Guidelines
-Recent commits use short, imperative subjects such as `Add action-aware pair diversity loss` and `Use diversity-first checkpoint selection`. Keep commits focused and descriptive. PRs should state what changed, why it changed, which config values or data assumptions were affected, and how the change was validated. Include sample metrics or visualization outputs when behavior changes materially.
+Recent commits use short imperative subjects such as `Add optimization principle diagram` and `Tune action aux anti-collapse weights`. Keep messages concise, action-first, and scoped to one change. PRs should describe behavior changes, list config or data path updates, and include metrics, logs, or plots when training behavior changes.
 
-## Data & Configuration Notes
-Prefer overriding dataset paths with CLI flags instead of hardcoding local directories. Do not commit raw datasets, cache files, checkpoints, or log outputs unless the change explicitly updates tracked documentation or small reference artifacts.
+## Configuration & Data Notes
+Treat `configs/default.yaml` as the source of truth for data roots, split settings, and training defaults. Do not hard-code machine-specific paths; use CLI flags such as `--aoa_cache_root` and `--labels_root`.
+
+## Agent-Specific Instructions
+- All user-facing dialogue, progress updates, and summaries must be written in Chinese.
+- After every code or document update, sync the current branch to GitHub with a scoped commit and `git push`. If push fails, report the blocker in the reply.
+- After every meaningful change, update the `Current Optimization Targets` section in this file so the goal list stays current.
+
+## Current Optimization Targets
+- In progress: restore training and evaluation semantic consistency, especially the regression risk introduced by `pelvis_torso` versus historical `mean_rms` normalization.
+- In progress: reduce average-pose collapse by tracking `nMPJPE`, `std_ratio`, and diversity-related metrics during ablation runs.
+- Pending: strengthen repeatable validation so changes affecting data, loss, or checkpoints are checked with `sanity_check/run_sanity_check.py`, `eval.py`, or `diagnose_pose_collapse.py`.
