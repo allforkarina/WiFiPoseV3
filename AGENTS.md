@@ -9,6 +9,7 @@ Use direct Python entry points from the repository root.
 - `python train.py --config configs/default.yaml --model_name resnet1d --val_env env3 --test_env env4` runs training with the default config.
 - `python eval.py --config configs/default.yaml --checkpoint checkpoints/<run>.pth` evaluates a saved checkpoint and writes plots under `logs/eval/`.
 - `python diagnose_pose_collapse.py --config configs/default.yaml --checkpoint_glob "checkpoints/*.pth"` summarizes collapse-related metrics across checkpoints.
+- `python tools/diagnose_input_pose_separability.py --aoa_cache_root <aoa_cache> --labels_root <labels_root>` compares AoA-distance and pose-distance consistency across normalization settings.
 - `python sanity_check/run_sanity_check.py --epochs 5 --device cpu` performs a smoke test of forward, loss, backward, and optimizer update.
 - `python tools/run_collapse_ablation.py --dry_run` previews ablation commands.
 - `python tools/prune_run_artifacts.py --keep 5` removes old logs and checkpoints.
@@ -32,7 +33,8 @@ Treat `configs/default.yaml` as the source of truth for data roots, split settin
 - After every meaningful change, update the `Current Optimization Targets` section in this file so the goal list stays current.
 
 ## Current Optimization Targets
-- In progress: restore training and evaluation semantic consistency, especially the regression risk introduced by `pelvis_torso` versus historical `mean_rms` normalization.
-- In progress: reduce average-pose collapse by tracking `nMPJPE`, `std_ratio`, and diversity-related metrics during ablation runs.
-- Pending: strengthen repeatable validation so changes affecting data, loss, or checkpoints are checked with `sanity_check/run_sanity_check.py`, `eval.py`, or `diagnose_pose_collapse.py`.
+- In progress: validate a pure-accuracy recovery baseline using `mean_rms`, `selection_mode=accuracy`, and zero diversity/action-aux losses; a 10-step smoke run completed, but full recovery is still pending.
+- In progress: explain average-pose collapse with measurable evidence; `tools/diagnose_input_pose_separability.py` is now the primary check for AoA/pose distance consistency.
+- Pending: restore training and evaluation semantic consistency, especially the regression risk introduced by `pelvis_torso` versus historical `mean_rms` normalization.
+- Pending: strengthen repeatable validation so changes affecting data, loss, or checkpoints are checked with `sanity_check/run_sanity_check.py`, `eval.py`, `diagnose_pose_collapse.py`, or `tools/diagnose_input_pose_separability.py`.
 - Pending: keep all validation and test execution aligned to the `WiFiPose` conda environment to avoid environment-dependent regressions.
