@@ -28,9 +28,11 @@ Treat `configs/default.yaml` as the source of truth for data roots, split settin
 ## Agent-Specific Instructions
 - All user-facing dialogue, progress updates, and summaries must be written in Chinese.
 - After every code or document update, sync the current branch to GitHub with a scoped commit and `git push`. If push fails, report the blocker in the reply.
+- The required runtime environment for this project is the `WiFiPose` conda environment. Before running tests or validation commands, verify the active environment; if it is not `WiFiPose`, run `conda activate WiFiPose` first.
 - After every meaningful change, update the `Current Optimization Targets` section in this file so the goal list stays current.
 
 ## Current Optimization Targets
 - In progress: restore training and evaluation semantic consistency, especially the regression risk introduced by `pelvis_torso` versus historical `mean_rms` normalization.
 - In progress: reduce average-pose collapse by tracking `nMPJPE`, `std_ratio`, and diversity-related metrics during ablation runs.
 - Pending: strengthen repeatable validation so changes affecting data, loss, or checkpoints are checked with `sanity_check/run_sanity_check.py`, `eval.py`, or `diagnose_pose_collapse.py`.
+- Pending: keep all validation and test execution aligned to the `WiFiPose` conda environment to avoid environment-dependent regressions.
