@@ -70,14 +70,20 @@ class AOASampleDataset(Dataset):
     def _normalize_aoa(aoa: np.ndarray) -> np.ndarray:
         aoa = np.asarray(aoa, dtype=np.float32)
         aoa = np.nan_to_num(aoa, nan=0.0, posinf=0.0, neginf=0.0)
-        aoa = np.maximum(aoa, 0.0)
-        aoa = np.log1p(aoa)
-        p99 = float(np.percentile(aoa, 99.0))
-        if p99 > 0:
-            aoa = np.clip(aoa / p99, 0.0, 1.0)
-        max_abs = float(np.max(np.abs(aoa)))
-        if max_abs > 0:
-            aoa = aoa / max_abs
+        # AOA_data stores frame spectra in a signed log-like domain where
+        # stronger responses are closer to 0 and weaker responses are more negative.
+        # Map each frame to [0, 1] with robust per-frame percentiles so the model
+        # sees stable peaks without destroying intra-frame shape.
+        lower = float(np.percentile(aoa, 1.0))
+        upper = float(np.percentile(aoa, 99.0))
+        if not np.isfinite(lower):
+            lower = float(np.min(aoa))
+        if not np.isfinite(upper):
+            upper = float(np.max(aoa))
+        if upper - lower < 1e-6:
+            upper = lower + 1e-6
+        aoa = np.clip(aoa, lower, upper)
+        aoa = (aoa - lower) / (upper - lower)
         return aoa.astype(np.float32)
 
     @staticmethod

@@ -29,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--labels_root", type=str, default="data/dataset")
     parser.add_argument("--label_normalize_mode", type=str, choices=["mean_rms", "pelvis_torso"], default="mean_rms")
     parser.add_argument("--window_sizes", type=int, nargs="+", default=[1, 5])
-    parser.add_argument("--aoa_modes", nargs="+", default=["raw_log", "curr_norm"])
+    parser.add_argument("--aoa_modes", nargs="+", default=["raw", "curr_norm"])
     parser.add_argument("--max_samples", type=int, default=400)
     parser.add_argument("--output_csv", type=str, default=None)
     return parser.parse_args()
@@ -38,11 +38,8 @@ def parse_args() -> argparse.Namespace:
 def normalize_raw_aoa(frame: np.ndarray, mode: str) -> np.ndarray:
     aoa = np.asarray(frame, dtype=np.float32)
     aoa = np.nan_to_num(aoa, nan=0.0, posinf=0.0, neginf=0.0)
-    aoa = np.maximum(aoa, 0.0)
     if mode == "raw":
         return aoa.astype(np.float32)
-    if mode == "raw_log":
-        return np.log1p(aoa).astype(np.float32)
     if mode == "curr_norm":
         return AOASampleDataset._normalize_aoa(aoa)
     raise ValueError(f"Unsupported aoa_mode: {mode}")
