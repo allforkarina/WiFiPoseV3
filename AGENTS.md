@@ -35,22 +35,32 @@ Treat `configs/default.yaml` as the source of truth for data roots, split settin
 ## Current Optimization Targets
 - Completed: clear stale `logs/` and `checkpoints/` outputs produced before the new `AOA_data` experiment cycle so subsequent validation starts from a clean artifact state.
 - Completed: use the new `AOA_data` features as the active training input with fixed per-frame percentile normalization; the `resnet1d + mean_rms + selection_mode=accuracy` baseline recovered to `val_nMPJPE=0.1948` and `test_nMPJPE=0.1943` under the 8x100 baseline budget.
-- Completed: validate a pure-accuracy recovery baseline using `mean_rms`, `selection_mode=accuracy`, and zero diversity/action-aux losses on the fixed `AOA_data` preprocessing pipeline.
+- Completed: establish a clean control baseline with `mean_rms`, `selection_mode=accuracy`, and zero diversity/action-aux losses on the fixed `AOA_data` preprocessing pipeline.
+- In progress: restart the project workflow from a clean cycle organized into three stages: baseline testing, diagnostic validation, and anti-collapse optimization.
 - In progress: explain residual average-pose collapse with measurable evidence; although `nMPJPE` has recovered, `diagnose_pose_collapse.py` shows `variance_ratio_pred_over_target≈0.057` and the prediction distribution is still much narrower than the target distribution.
-- In progress: use the recovered pure-accuracy baseline as the new control group and run single-factor anti-collapse experiments in a fixed order: `lambda_inter_div` first, then `selection_mode=diversity_first`, then `action_aux`.
+- Pending: strengthen repeatable validation so every change affecting data, loss, selection strategy, or checkpoints is checked with `sanity_check/run_sanity_check.py`, `eval.py`, `diagnose_pose_collapse.py`, and `tools/diagnose_input_pose_separability.py`.
 - Pending: restore training and evaluation semantic consistency, especially whether `pelvis_torso` still carries regression risk relative to the recovered `mean_rms` baseline after anti-collapse terms are reintroduced.
-- Pending: strengthen repeatable validation so changes affecting data, loss, or checkpoints are checked with `sanity_check/run_sanity_check.py`, `eval.py`, `diagnose_pose_collapse.py`, or `tools/diagnose_input_pose_separability.py`.
 - Pending: keep all validation and test execution aligned to the `WiFiPose` conda environment to avoid environment-dependent regressions.
 
-## 下阶段任务
-- 第一阶段：将当前 `resnet1d + mean_rms + selection_mode=accuracy + zero diversity/action_aux` 结果固定为控制组，统一对照 `val_nMPJPE≈0.1948`、`test_nMPJPE≈0.1943`、`variance_ratio≈0.057`。
-- 第二阶段：只加入 `lambda_inter_div`，其余设置保持不变，观察是否能在不显著破坏 `nMPJPE` 的前提下提升 `variance_ratio_pred_over_target`、`pred_group_std_mean` 与动作间均值差异。
-- 第三阶段：只有当第二阶段证明 `lambda_inter_div` 有正收益后，才切换到 `selection_mode=diversity_first` 做单因素对照，判断 checkpoint 选择策略是否进一步改善跨动作分离。
-- 第四阶段：只有当前两项都得到明确结论后，才加入 `action_aux`，评估动作监督是否能继续抬高预测分布多样性而不拉高回归误差。
-- 第五阶段：在抗坍缩项的最优组合确定后，再回到 `pelvis_torso` 与 `mean_rms` 的语义一致性问题，确认新的最优配置不会重新引入坐标系回归。
+## 测试 Plan
+- 第一阶段：先重新建立干净的控制组实验，只使用 `resnet1d + mean_rms + selection_mode=accuracy + zero diversity/action_aux`，重新产出 smoke、短程训练与完整 baseline 的最新结果。
+- 第二阶段：每个候选改动只允许变动一个因素，实验顺序固定为 `lambda_inter_div` -> `selection_mode=diversity_first` -> `action_aux`。
+- 第三阶段：每次实验统一保存训练日志、history、checkpoint 与评估输出，禁止未完成验证就继续叠加下一个改动。
 
-## 下一阶段目标
-- 目标一：确认当前问题已从“训练失败”收敛为“精度恢复但预测分布过窄”，后续优化重点转为提升跨样本与跨动作多样性。
-- 目标二：在保持 `test_nMPJPE` 不明显差于 `0.1943` 的前提下，将 `variance_ratio_pred_over_target` 从约 `0.057` 明显抬升。
-- 目标三：让 `diagnose_pose_collapse.py` 中的 `mse_pred_to_target` 稳定优于 `mse_meanpose_to_target`，避免模型在诊断上继续接近全局平均姿态基线。
-- 目标四：形成一套固定、可复现的单因素抗坍缩实验顺序，避免再次出现“多项改动同时发生导致结论不可归因”的问题。
+## 验证 Plan
+- 第一阶段：所有实验至少执行 `sanity_check/run_sanity_check.py` 或等价 smoke，确认前向、反向、优化器更新和数据加载正常。
+- 第二阶段：每轮实验训练后统一运行 `eval.py`、`diagnose_pose_collapse.py` 与 `tools/diagnose_input_pose_separability.py`，分别检查精度、坍缩程度与输入可分性。
+- 第三阶段：统一对照控制组指标 `val_nMPJPE≈0.1948`、`test_nMPJPE≈0.1943`、`variance_ratio≈0.057`、`mse_pred_to_target` 与 `mse_meanpose_to_target` 的关系。
+- 第四阶段：只有当改动在验证集和测试集上都成立，且结论可复现，才允许进入下一轮优化。
+
+## 优化 Plan
+- 第一阶段：优先提升跨样本和跨动作多样性，核心目标是在不明显破坏 `nMPJPE` 的前提下抬升 `variance_ratio_pred_over_target`、`pred_group_std_mean` 与动作间均值差异。
+- 第二阶段：如果 `lambda_inter_div` 证明有效，再评估 `selection_mode=diversity_first` 是否能让 checkpoint 选择更偏向非坍缩解。
+- 第三阶段：只有当前两项有明确收益后，再加入 `action_aux`，判断动作监督能否进一步拉开动作间表征。
+- 第四阶段：当抗坍缩最优组合稳定后，再回到 `pelvis_torso` 与 `mean_rms` 的语义一致性问题，确认不会重新引入坐标系回归。
+
+## 新周期目标
+- 目标一：把当前工作流重置为“先测试、再验证、后优化”的稳定循环，而不是并行混改。
+- 目标二：维持或接近当前 `test_nMPJPE≈0.1943` 的精度水平，同时让预测分布显著摆脱平均姿态收缩。
+- 目标三：让 `diagnose_pose_collapse.py` 中的 `variance_ratio_pred_over_target` 明显高于当前约 `0.057`，并使 `mse_pred_to_target` 稳定优于 `mse_meanpose_to_target`。
+- 目标四：形成一套可以直接复用到后续模型、损失和归一化实验中的标准验证流程。
