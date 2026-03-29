@@ -33,6 +33,7 @@ Treat `configs/default.yaml` as the source of truth for data roots, split settin
 - After every meaningful change, update the `Current Optimization Targets` section in this file so the goal list stays current.
 
 ## Current Optimization Targets
+- Completed: clear stale `logs/` and `checkpoints/` outputs produced before the new `AOA_data` experiment cycle so subsequent validation starts from a clean artifact state.
 - Completed: use the new `AOA_data` features as the active training input with fixed per-frame percentile normalization; the `resnet1d + mean_rms + selection_mode=accuracy` baseline recovered to `val_nMPJPE=0.1948` and `test_nMPJPE=0.1943` under the 8x100 baseline budget.
 - Completed: validate a pure-accuracy recovery baseline using `mean_rms`, `selection_mode=accuracy`, and zero diversity/action-aux losses on the fixed `AOA_data` preprocessing pipeline.
 - In progress: explain residual average-pose collapse with measurable evidence; although `nMPJPE` has recovered, `diagnose_pose_collapse.py` shows `variance_ratio_pred_over_target≈0.057` and the prediction distribution is still much narrower than the target distribution.
