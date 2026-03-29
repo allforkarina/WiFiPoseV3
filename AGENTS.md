@@ -35,13 +35,21 @@ Treat `configs/default.yaml` as the source of truth for data roots, split settin
 ## Current Optimization Targets
 - Completed: use the new `AOA_data` features as the active training input with fixed per-frame percentile normalization; the `resnet1d + mean_rms + selection_mode=accuracy` baseline recovered to `val_nMPJPE=0.1948` and `test_nMPJPE=0.1943` under the 8x100 baseline budget.
 - Completed: validate a pure-accuracy recovery baseline using `mean_rms`, `selection_mode=accuracy`, and zero diversity/action-aux losses on the fixed `AOA_data` preprocessing pipeline.
-- In progress: explain average-pose collapse with measurable evidence; `tools/diagnose_input_pose_separability.py` remains the primary check for AoA/pose distance consistency under the new fixed preprocessing.
-- Pending: restore training and evaluation semantic consistency, especially whether `pelvis_torso` still carries regression risk relative to the now-recovered `mean_rms` baseline.
+- In progress: explain residual average-pose collapse with measurable evidence; although `nMPJPE` has recovered, `diagnose_pose_collapse.py` shows `variance_ratio_pred_over_target≈0.057` and the prediction distribution is still much narrower than the target distribution.
+- In progress: use the recovered pure-accuracy baseline as the new control group and run single-factor anti-collapse experiments in a fixed order: `lambda_inter_div` first, then `selection_mode=diversity_first`, then `action_aux`.
+- Pending: restore training and evaluation semantic consistency, especially whether `pelvis_torso` still carries regression risk relative to the recovered `mean_rms` baseline after anti-collapse terms are reintroduced.
 - Pending: strengthen repeatable validation so changes affecting data, loss, or checkpoints are checked with `sanity_check/run_sanity_check.py`, `eval.py`, `diagnose_pose_collapse.py`, or `tools/diagnose_input_pose_separability.py`.
 - Pending: keep all validation and test execution aligned to the `WiFiPose` conda environment to avoid environment-dependent regressions.
 
 ## 下阶段任务
-- 第一阶段：基于已恢复的纯精度基线，重新运行 `tools/diagnose_input_pose_separability.py`、`eval.py` 与 `diagnose_pose_collapse.py`，补齐固定 `AOA_data` 预处理下的诊断证据。
-- 第二阶段：逐项重新加入 `lambda_inter_div`、`diversity_first` 与 `action_aux`，分别评估它们对坍缩问题的独立影响。
-- 第三阶段：在固定 `AOA_data` 预处理下，再评估 `pelvis_torso` 是否仍然带来语义或性能回归。
-- 第四阶段：将后续训练与评估统一保持在这套固定 `AOA_data` 预处理和 `WiFiPose` 环境下，并持续记录可复现结果。
+- 第一阶段：将当前 `resnet1d + mean_rms + selection_mode=accuracy + zero diversity/action_aux` 结果固定为控制组，统一对照 `val_nMPJPE≈0.1948`、`test_nMPJPE≈0.1943`、`variance_ratio≈0.057`。
+- 第二阶段：只加入 `lambda_inter_div`，其余设置保持不变，观察是否能在不显著破坏 `nMPJPE` 的前提下提升 `variance_ratio_pred_over_target`、`pred_group_std_mean` 与动作间均值差异。
+- 第三阶段：只有当第二阶段证明 `lambda_inter_div` 有正收益后，才切换到 `selection_mode=diversity_first` 做单因素对照，判断 checkpoint 选择策略是否进一步改善跨动作分离。
+- 第四阶段：只有当前两项都得到明确结论后，才加入 `action_aux`，评估动作监督是否能继续抬高预测分布多样性而不拉高回归误差。
+- 第五阶段：在抗坍缩项的最优组合确定后，再回到 `pelvis_torso` 与 `mean_rms` 的语义一致性问题，确认新的最优配置不会重新引入坐标系回归。
+
+## 下一阶段目标
+- 目标一：确认当前问题已从“训练失败”收敛为“精度恢复但预测分布过窄”，后续优化重点转为提升跨样本与跨动作多样性。
+- 目标二：在保持 `test_nMPJPE` 不明显差于 `0.1943` 的前提下，将 `variance_ratio_pred_over_target` 从约 `0.057` 明显抬升。
+- 目标三：让 `diagnose_pose_collapse.py` 中的 `mse_pred_to_target` 稳定优于 `mse_meanpose_to_target`，避免模型在诊断上继续接近全局平均姿态基线。
+- 目标四：形成一套固定、可复现的单因素抗坍缩实验顺序，避免再次出现“多项改动同时发生导致结论不可归因”的问题。
