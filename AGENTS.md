@@ -37,8 +37,9 @@ Treat `configs/default.yaml` as the source of truth for data roots, split settin
 - Completed: use the new `AOA_data` features as the active training input with fixed per-frame percentile normalization; the `resnet1d + mean_rms + selection_mode=accuracy` baseline recovered to `val_nMPJPE=0.1948` and `test_nMPJPE=0.1943` under the 8x100 baseline budget.
 - Completed: establish a clean control baseline with `mean_rms`, `selection_mode=accuracy`, and zero diversity/action-aux losses on the fixed `AOA_data` preprocessing pipeline.
 - Completed: rebuild the clean control cycle from scratch after log/checkpoint cleanup, including sanity check, 10-step smoke, full 8x100 baseline, `eval.py`, `diagnose_pose_collapse.py`, and `tools/diagnose_input_pose_separability.py`.
-- In progress: restart the project workflow from a clean cycle organized into three stages: baseline testing, diagnostic validation, and anti-collapse optimization.
-- In progress: explain residual average-pose collapse with measurable evidence; in the rebuilt control cycle the full baseline reached `val_nMPJPE=0.194662`, `test_nMPJPE=0.194259`, `eval mean_nMPJPE=0.197071`, but `diagnose_pose_collapse.py` still shows `variance_ratio_pred_over_target≈0.0708` on `env3` and `≈0.0696` on `env4`, with `mse_pred_to_target` still slightly worse than the global mean-pose baseline.
+- Completed: 重新建立干净的控制组实验，只使用 `resnet1d + mean_rms + selection_mode=accuracy + zero diversity/action_aux`。
+- Completed: 引入跨动作多样性损失 `lambda_inter_div=0.25` 开展单一变量控制实验，实验表明此损失将模型测试验证集指标表现降低至 `test_nMPJPE=0.2023`，但使得预测分布方差比 `variance_ratio_pred_over_target` 从 `0.07` 提升到 `0.1270`！
+- In progress: 下一步实验测试 `selection_mode=diversity_first` 是否能让 checkpoint 选择更偏向非坍缩解。
 - Pending: strengthen repeatable validation so every change affecting data, loss, selection strategy, or checkpoints is checked with `sanity_check/run_sanity_check.py`, `eval.py`, `diagnose_pose_collapse.py`, and `tools/diagnose_input_pose_separability.py`.
 - Pending: restore training and evaluation semantic consistency, especially whether `pelvis_torso` still carries regression risk relative to the recovered `mean_rms` baseline after anti-collapse terms are reintroduced.
 - Pending: keep all validation and test execution aligned to the `WiFiPose` conda environment to avoid environment-dependent regressions.
