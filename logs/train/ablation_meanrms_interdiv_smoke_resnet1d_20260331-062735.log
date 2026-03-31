@@ -1,0 +1,22 @@
+[run] config=configs/default.yaml device=cuda:0
+[run] model=resnet1d
+[run] window_size=1
+[run] normalize_mode=mean_rms
+[run] aoa_cache_root=D:\Files\WiFi_Pose\WiFiPoseV3\data\AOA_data
+[run] labels_root=D:\Files\WiFi_Pose\WiFiPoseV3\data\dataset
+[run] val_env=env3 test_env=env4
+[run] logs_file=C:\Users\LuvRene\OneDrive\PythonProjects\Positioning\pose_estimationV2\logs\train\ablation_meanrms_interdiv_smoke_resnet1d_20260331-062735.log
+[run] selection_mode=accuracy lambda_var=0.000 lambda_batch_div=0.000 lambda_inter_div=0.250 lambda_intra_div=0.000
+[data] dataset_size=320760 train_size=160380 val_size=80190 test_size=80190 batch_size=64 window_size=1
+[run] action_aux enabled=False
+[epoch_start] epoch=1/1 train_size=160380 val_size=80190 test_size=80190 lr=3.000e-04 lambda_batch_div=0.000 lambda_inter_div=0.250 lambda_intra_div=0.000
+[train] epoch=1/1 step=1/10 loss=2.132907 grad_norm=5.374
+[train] epoch=1/1 step=2/10 loss=1.897078 grad_norm=5.027
+[train] epoch=1/1 step=3/10 loss=1.650056 grad_norm=4.610
+[train] epoch=1/1 step=4/10 loss=1.427546 grad_norm=4.520
+[train] epoch=1/1 step=5/10 loss=1.238194 grad_norm=4.685
+[train] epoch=1/1 step=6/10 loss=1.084171 grad_norm=3.710
+[train] epoch=1/1 step=7/10 loss=0.952680 grad_norm=3.385
+[train] epoch=1/1 step=8/10 loss=0.873468 grad_norm=3.036
+[train] epoch=1/1 step=9/10 loss=0.762236 grad_norm=2.829
+[train] epoch=1/1 step=10/10 loss=0.722448 grad_norm=2.652

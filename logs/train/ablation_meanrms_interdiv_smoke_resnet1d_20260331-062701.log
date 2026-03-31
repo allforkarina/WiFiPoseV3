@@ -1,0 +1,9 @@
+[run] config=configs/default.yaml device=cuda:0
+[run] model=resnet1d
+[run] window_size=1
+[run] normalize_mode=mean_rms
+[run] aoa_cache_root=C:\Users\LuvRene\OneDrive\PythonProjects\Positioning\pose_estimationV2\data\aoa_cache
+[run] labels_root=C:\Users\LuvRene\OneDrive\PythonProjects\Positioning\pose_estimationV2\data\dataset
+[run] val_env=env3 test_env=env4
+[run] logs_file=C:\Users\LuvRene\OneDrive\PythonProjects\Positioning\pose_estimationV2\logs\train\ablation_meanrms_interdiv_smoke_resnet1d_20260331-062701.log
+[run] selection_mode=accuracy lambda_var=0.000 lambda_batch_div=0.000 lambda_inter_div=0.250 lambda_intra_div=0.000
