@@ -38,7 +38,7 @@ dataset:
   cache_in_memory: false
   input_channels: 11
   input_length: 181
-  num_workers: 4
+  num_workers: 0
   pin_memory: true
   window_size: 11
 domain_adaptation:

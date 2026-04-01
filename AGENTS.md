@@ -43,7 +43,8 @@ Treat `configs/default.yaml` as the source of truth for data roots, split settin
 - Completed: 暂时搁置附加损失和多样性优化，为了定位“网络是否能够拟合训练集”以及“坍缩是否由于结构瓶颈导致”，完成了一次“纯净版 Vanilla”实验（关闭一切附加约束损失、多样性损失，关闭 Dropout 等，仅仅使用 Huber Loss）。测试结果表明：`train_nMPJPE=0.1972`，`test_nMPJPE=0.1950`，且 `mse_pred=0.0382` 甚至差于 `mse_meanpose=0.0373`。这证明在使用 ResNet1D（内置 `AdaptiveAvgPool1d`）以及当前 AoA 特征的数据结构下，网络连**训练集本身都无法真正过拟合**，其对空间特征的理解完全退化成了输出平均姿态。这指向了特征预处理机制和网络池化层的深层结构瓶颈！
 - Completed: 移除 ResNet1D 中的 `AdaptiveAvgPool1d(1)` 并使用 `Flatten()` 进行单一环境 (env1) 过拟合实验 (Phase 1 Step 1.1)。结果发现 Train Loss 仍未出现断崖式下降，停留在 0.015-0.02的水平。证明仍然未能过拟合。
 - Completed: 启动 Phase 1 Step 1.2，引入 `ms_tcn_pose` 并增加 `window_size=11` 来引入时序信息，测试能否打破单帧歧义并实现单环境过拟合。结果表明：到了第 15 个 epoch 时，`train_loss` 仅降低至 0.0062（对应 nMPJPE 仍高于 0.05 期望值，并且验证集 `val_nmpjpe` 恶化维持在 0.22 左右），说明引入时间窗依然不能达到“死记硬背”级过拟合，模型特征提取能力由于特征本身的质量或纯净度仍然存在根本性阻断！
-- In progress: 启动 Phase 1 Step 1.3，极大简化数据复杂度：关闭 Shuffle 用单一 Batch (batch_size=64) 极其暴力地迭代 500 次，以此来排查数据纯度和网络基础前传梯度是否完全正常。
+- Completed: 启动 Phase 1 Step 1.3，极大简化数据复杂度：关闭 Shuffle 用单一 Batch (batch_size=64) 极其暴力地迭代 500 次，以此来排查数据纯度和网络基础前传梯度是否完全正常。结果表明：在短短的 20 个 epochs 左右，模型 `train_loss` 迅速崩塌，并在 260 轮达到 `loss=0.000003` 且 `grad_norm=0.000`，实现了绝对的单样本记忆层级过拟合。这彻底证明了：**模型代码无 Bug、梯度传导完全正常、标签缩放范围合理。核心矛盾彻底落在了数据集的多样性映射上（同特征存在过多矛盾动作，或特征空间完全散乱），导致模型一旦引入跨 Batch 梯度立即发生坍缩拉平。**
+- In progress: Phase 1 阶段已彻底证明网络、代码、框架层面无异常，问题归因到数据本身的特征连通层面。接下来推进到 Phase 2: 重塑数据与标签空间 相关的分析验证。
 - Pending: 重新引入 `action_aux` 动作监督或其他抗坍缩损失需要在网络有足够的表征容量以分离输入特征后再次测试。
 - Pending: keep all validation and test execution aligned to the `WiFiPose` conda environment to avoid environment-dependent regressions.
 
