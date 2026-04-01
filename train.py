@@ -465,11 +465,11 @@ def build_dataloaders(
 		# Subset of subset - we take just `batch_size` items from `train_indices`
 		single_batch_indices = train_indices[:batch_size]
 		train_loader = build_subset_loader(ds, single_batch_indices, batch_size, num_workers, pin_memory, False, False)
-	
-	val_loader = build_subset_loader(ds, val_indices, batch_size, num_workers, pin_memory, False, False)
-	test_loader = build_subset_loader(ds, test_indices, batch_size, num_workers, pin_memory, False, False)
-
-	stats = {
+		val_loader = build_subset_loader(ds, val_indices[:batch_size], batch_size, num_workers, pin_memory, False, False)
+		test_loader = build_subset_loader(ds, test_indices[:batch_size], batch_size, num_workers, pin_memory, False, False)
+	else:
+		val_loader = build_subset_loader(ds, val_indices, batch_size, num_workers, pin_memory, False, False)
+		test_loader = build_subset_loader(ds, test_indices, batch_size, num_workers, pin_memory, False, False)
 		"dataset_size": len(ds),
 		"train_size": len(train_indices),
 		"val_size": len(val_indices),
