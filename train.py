@@ -487,7 +487,7 @@ def build_dataloaders(
 	return train_loader, val_loader, test_loader, stats
 
 
-def build_model(cfg: Dict[str, Any], device: torch.device, model_name_override: str | None, window_size: int | None = None) -> nn.Module:
+def build_model(cfg: Dict[str, Any], device: torch.device, model_name_override: str | None, window_size: int | None = None, num_envs: int = 0) -> nn.Module:
 	mcfg = cfg.get("model", {})
 	model_name = (model_name_override or mcfg.get("name", "conv1d_baseline")).lower()
 	effective_window = int(window_size if window_size is not None else cfg.get("dataset", {}).get("window_size", 1))
@@ -975,7 +975,7 @@ def main() -> None:
 		always=True,
 	)
 
-	model = build_model(cfg, device, args.model_name, window_size=window_size)
+	model = build_model(cfg, device, args.model_name, window_size=window_size, num_envs=num_envs)
 	action_aux_cfg = cfg.get("action_aux", {})
 	use_action_aux = bool(action_aux_cfg.get("enable", False))
 	lambda_action_cls = float(action_aux_cfg.get("lambda_cls", 0.0))
