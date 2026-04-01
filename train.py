@@ -430,7 +430,7 @@ def build_subset_loader(
 
 def build_dataloaders(
 	cfg: Dict[str, Any],
-	use_stratified: bool,
+	args: argparse.Namespace,
 	device: torch.device,
 	aoa_root: Path,
 	labels_root: Path,
@@ -459,7 +459,13 @@ def build_dataloaders(
 	if not test_indices:
 		raise RuntimeError(f"Test split is empty for test_env={test_env}")
 
-	train_loader = build_subset_loader(ds, train_indices, batch_size, num_workers, pin_memory, True, use_stratified)
+	train_loader = build_subset_loader(ds, train_indices, batch_size, num_workers, pin_memory, not args.single_batch, args.use_stratified and not args.single_batch)
+	if args.single_batch:
+		# Keep only the very first batch
+		# Subset of subset - we take just `batch_size` items from `train_indices`
+		single_batch_indices = train_indices[:batch_size]
+		train_loader = build_subset_loader(ds, single_batch_indices, batch_size, num_workers, pin_memory, False, False)
+	
 	val_loader = build_subset_loader(ds, val_indices, batch_size, num_workers, pin_memory, False, False)
 	test_loader = build_subset_loader(ds, test_indices, batch_size, num_workers, pin_memory, False, False)
 
@@ -867,6 +873,7 @@ def main() -> None:
 	parser = argparse.ArgumentParser(description="Training loop for AoA pose models with train/val/test splits")
 	parser.add_argument("--config", type=str, default="configs/default.yaml")
 	parser.add_argument("--use_stratified", action="store_true")
+	parser.add_argument("--single_batch", action="store_true", help="Extreme overfit mode: train on a single batch iteratively")
 	parser.add_argument("--max_steps", type=int, default=0, help="Max training steps per epoch (0 = full epoch)")
 	parser.add_argument("--checkpoint", type=str, default="checkpoints/debug_ckpt.pth")
 	parser.add_argument("--resume", action="store_true")
@@ -947,7 +954,7 @@ def main() -> None:
 
 	train_loader, val_loader, test_loader, split_stats = build_dataloaders(
 		cfg=cfg,
-		use_stratified=args.use_stratified,
+		args=args,
 		device=device,
 		aoa_root=aoa_root,
 		labels_root=labels_root,
