@@ -393,29 +393,23 @@ def split_indices_by_envs(
 	val_indices: list[int] = []
 	test_indices: list[int] = []
 	
-	# Extract explicitly supplied train_env if provided in arguments (sys.argv check hack)
-	import sys
-	train_env = None
-	if '--train_env' in sys.argv:
-		train_env = sys.argv[sys.argv.index('--train_env') + 1]
+        import sys
+        train_env_str = ""
+        if '--train_env' in sys.argv:
+            train_env_str = sys.argv[sys.argv.index('--train_env') + 1]
+            
+        train_envs = [e.strip() for e in train_env_str.split(',')] if train_env_str else []
+        val_envs = [e.strip() for e in val_env.split(',')]
+        test_envs = [e.strip() for e in test_env.split(',')]
 
-	for idx, (_, sample, _) in enumerate(ds.index):
-		env_id = sample_to_env(sample)
-		if env_id == val_env:
-			val_indices.append(idx)
-		elif env_id == test_env:
-			test_indices.append(idx)
-		else:
-			if train_env is None or env_id == train_env:
-				train_indices.append(idx)
-	return train_indices, val_indices, test_indices
-
-
-def build_subset_loader(
-	ds: AOASampleDataset,
-	indices: list[int],
-	batch_size: int,
-	num_workers: int,
+        for idx, (_, sample, _) in enumerate(ds.index):
+                env_id = sample_to_env(sample)
+                if env_id in val_envs:
+                        val_indices.append(idx)
+                elif env_id in test_envs:
+                        test_indices.append(idx)
+                else:
+                        if not train_envs or env_id in train_envs:
 	pin_memory: bool,
 	shuffle: bool,
 	use_stratified: bool,
