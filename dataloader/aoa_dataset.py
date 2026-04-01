@@ -116,7 +116,17 @@ class AOASampleDataset(Dataset):
             window = []
             for offset in range(-self.window_radius, self.window_radius + 1):
                 source_idx = min(max(frame_idx + offset, 0), num_frames - 1)
-                window.append(self._normalize_aoa(np.asarray(aoa_frames[source_idx], dtype=np.float32)))
+                curr_frame = self._normalize_aoa(np.asarray(aoa_frames[source_idx], dtype=np.float32))
+                
+                # Phase 1 Step 1.1: Temporal Difference (Dynamic Filtering)
+                # We calculate difference between current frame and previous frame to
+                # completely zero out static walls and furniture reflections, keeping 
+                # only dynamic human movements. The first frame differences against itself (zeros).
+                prev_idx = max(source_idx - 1, 0)
+                prev_frame = self._normalize_aoa(np.asarray(aoa_frames[prev_idx], dtype=np.float32))
+                diff_frame = curr_frame - prev_frame
+                
+                window.append(diff_frame)
             aoa = np.stack(window, axis=0)
             # try label_files in h5 if present
             label_path = None
