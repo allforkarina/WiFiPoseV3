@@ -1178,7 +1178,10 @@ def main() -> None:
 		model,
 		extra_modules={"action_head": action_head} if action_head is not None else None,
 	)
+	train_loss, train_nm, train_parts = evaluate(model, action_head, train_loader, device, criterion, lambda_action_cls)
 	test_loss, test_nm, test_parts = evaluate(model, action_head, test_loader, device, criterion, lambda_action_cls)
+	logger.log(f"[train eval] nMPJPE={train_nm:.4f}", always=True)
+	logger.log(f"[test eval] nMPJPE={test_nm:.4f}", always=True)
 	plot_history(plot_path, history_rows, logger)
 	logger.log(f"[history] saved path={history_path}", always=True)
 	assessment, reason = assess_fit(history_rows, test_nm)

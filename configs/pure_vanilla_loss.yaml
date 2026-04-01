@@ -1,0 +1,136 @@
+action_aux:
+  dropout: 0.1
+  enable: false
+  lambda_cls: 0.2
+  num_actions: 27
+aoa:
+  bins: 181
+  use_tof: false
+aoa_cache_root: data/aoa_cache
+augmentation:
+  aoa_shift_bins: 0
+  enable: false
+  gain_range:
+  - 1.0
+  - 1.0
+  max_dropout_bins: 0
+  noise_std: 0.0
+  prob_bin_dropout: 0.0
+  prob_gain: 0.0
+  prob_noise: 0.0
+checkpoint:
+  mode: min
+  monitor: val/N-MPJPE
+  resume: false
+  resume_checkpoint: ''
+  save_interval_epochs: 1
+  save_top_k: 3
+  selection:
+    inter_pair_ratio_weight: 0.15
+    mode: diversity_first
+    nmpjpe_penalty: 0.02
+    pair_ratio_weight: 1.0
+    std_ratio_weight: 0.35
+checkpoints_root: checkpoints
+data_root: data
+dataset:
+  batch_size: 64
+  cache_in_memory: false
+  input_channels: 1
+  input_length: 181
+  num_workers: 4
+  pin_memory: true
+  window_size: 1
+domain_adaptation:
+  lambda_domain: 0.01
+  use_dann: false
+  use_mmd: false
+eval:
+  metrics:
+  - N-MPJPE
+  - TorsoOrientationError
+  - BoneCosine
+  - JointAngleRMSE
+  - PCK
+  pck_thresholds:
+  - 0.05
+  - 0.1
+h5:
+  chunk_frames: 32
+  compression: gzip
+  compression_level: 4
+  frames_per_sample: 297
+  write_atomic: true
+labels_root: data/dataset
+logging:
+  log_interval_steps: 10
+  use_wandb: false
+  wandb_project: wifi_aoa_pose
+logs_root: logs
+loss:
+  batch_div_schedule:
+    enable: false
+    end: 0.4
+    name: rise_fall
+    peak: 0.6
+    peak_epoch_ratio: 0.4
+    start: 0.3
+  huber_delta: 1.0
+  inter_div_schedule:
+    enable: false
+    end: 0.35
+    name: rise_fall
+    peak: 0.55
+    peak_epoch_ratio: 0.45
+    start: 0.25
+  intra_div_schedule:
+    enable: false
+    name: fixed
+    start: 0.0
+  lambda_angle: 0.0
+  lambda_batch_div: 0.0
+  lambda_dir: 0.0
+  lambda_inter_div: 0.0
+  lambda_intra_div: 0.0
+  lambda_len: 0.0
+  lambda_pose: 1.0
+  lambda_reg: 0.0
+  lambda_sym: 0.0
+  lambda_var: 0.0
+  normalize_mode: pelvis_torso
+  preserve_ratio: 0.6
+misc:
+  deterministic: false
+  verbose: true
+model:
+  dropout: 0.0
+  hidden_dim: 256
+  input_channels: 1
+  input_length: 181
+  name: conv1d_baseline
+preprocess_version: v1.1
+raw_data_root: data/dataset
+splits:
+  folds: 4
+  protocol: LOEO
+  sample_env_rule:
+    env_prefix: env
+    group_size: 10
+  splits_dir: splits
+splits_root: splits
+train:
+  device: cuda:0
+  epochs: 100
+  grad_clip: 1.0
+  lr: 3e-4
+  lr_scheduler:
+    name: cosine
+    warmup_epochs: 5
+  optimizer: AdamW
+  seed: 42
+  weight_decay: 1e-4
+verify:
+  bad_samples_log: data/bad_samples.log
+  compute_sha256: true
+  require_frame_count: 297
+  skip_bad_samples: true

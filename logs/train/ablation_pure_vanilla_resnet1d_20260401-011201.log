@@ -1,0 +1,112 @@
+[run] config=configs/pure_vanilla_loss.yaml device=cuda:0
+[run] model=resnet1d
+[run] window_size=1
+[run] normalize_mode=mean_rms
+[run] aoa_cache_root=D:\Files\WiFi_Pose\WiFiPoseV3\data\AOA_data
+[run] labels_root=D:\Files\WiFi_Pose\WiFiPoseV3\data\dataset
+[run] val_env=env3 test_env=env4
+[run] logs_file=C:\Users\LuvRene\OneDrive\PythonProjects\Positioning\pose_estimationV2\logs\train\ablation_pure_vanilla_resnet1d_20260401-011201.log
+[run] selection_mode=accuracy lambda_var=0.000 lambda_batch_div=0.000 lambda_inter_div=0.000 lambda_intra_div=0.000
+[data] dataset_size=320760 train_size=160380 val_size=80190 test_size=80190 batch_size=64 window_size=1
+[run] action_aux enabled=False
+[epoch_start] epoch=1/8 train_size=160380 val_size=80190 test_size=80190 lr=3.000e-04 lambda_batch_div=0.000 lambda_inter_div=0.000 lambda_intra_div=0.000
+[train] epoch=1/8 step=1/100 loss=0.228510 grad_norm=0.683
+[train] epoch=1/8 step=2/100 loss=0.186308 grad_norm=0.578
+[train] epoch=1/8 step=3/100 loss=0.156136 grad_norm=0.532
+[train] epoch=1/8 step=4/100 loss=0.129455 grad_norm=0.517
+[train] epoch=1/8 step=5/100 loss=0.108112 grad_norm=0.500
+[train] epoch=1/8 step=6/100 loss=0.086885 grad_norm=0.485
+[train] epoch=1/8 step=7/100 loss=0.069524 grad_norm=0.466
+[train] epoch=1/8 step=8/100 loss=0.053778 grad_norm=0.418
+[train] epoch=1/8 step=9/100 loss=0.041593 grad_norm=0.370
+[train] epoch=1/8 step=10/100 loss=0.033709 grad_norm=0.292
+[train] epoch=1/8 step=11/100 loss=0.033047 grad_norm=0.228
+[train] epoch=1/8 step=12/100 loss=0.026930 grad_norm=0.220
+[train] epoch=1/8 step=13/100 loss=0.028365 grad_norm=0.231
+[train] epoch=1/8 step=14/100 loss=0.024300 grad_norm=0.234
+[train] epoch=1/8 step=15/100 loss=0.025086 grad_norm=0.236
+[train] epoch=1/8 step=16/100 loss=0.032335 grad_norm=0.258
+[train] epoch=1/8 step=17/100 loss=0.022194 grad_norm=0.216
+[train] epoch=1/8 step=18/100 loss=0.028109 grad_norm=0.219
+[train] epoch=1/8 step=19/100 loss=0.022835 grad_norm=0.177
+[train] epoch=1/8 step=20/100 loss=0.024812 grad_norm=0.150
+[train] epoch=1/8 step=21/100 loss=0.022696 grad_norm=0.152
+[train] epoch=1/8 step=22/100 loss=0.026959 grad_norm=0.141
+[train] epoch=1/8 step=23/100 loss=0.019903 grad_norm=0.119
+[train] epoch=1/8 step=24/100 loss=0.018855 grad_norm=0.117
+[train] epoch=1/8 step=25/100 loss=0.025715 grad_norm=0.095
+[train] epoch=1/8 step=26/100 loss=0.022147 grad_norm=0.093
+[train] epoch=1/8 step=27/100 loss=0.017748 grad_norm=0.120
+[train] epoch=1/8 step=28/100 loss=0.027144 grad_norm=0.117
+[train] epoch=1/8 step=29/100 loss=0.020788 grad_norm=0.087
+[train] epoch=1/8 step=30/100 loss=0.017952 grad_norm=0.099
+[train] epoch=1/8 step=31/100 loss=0.020556 grad_norm=0.089
+[train] epoch=1/8 step=32/100 loss=0.018172 grad_norm=0.070
+[train] epoch=1/8 step=33/100 loss=0.017063 grad_norm=0.087
+[train] epoch=1/8 step=34/100 loss=0.018670 grad_norm=0.067
+[train] epoch=1/8 step=35/100 loss=0.017504 grad_norm=0.071
+[train] epoch=1/8 step=36/100 loss=0.023753 grad_norm=0.080
+[train] epoch=1/8 step=37/100 loss=0.023717 grad_norm=0.079
+[train] epoch=1/8 step=38/100 loss=0.018059 grad_norm=0.067
+[train] epoch=1/8 step=39/100 loss=0.025784 grad_norm=0.092
+[train] epoch=1/8 step=40/100 loss=0.021921 grad_norm=0.075
+[train] epoch=1/8 step=41/100 loss=0.017222 grad_norm=0.051
+[train] epoch=1/8 step=42/100 loss=0.016668 grad_norm=0.083
+[train] epoch=1/8 step=43/100 loss=0.018433 grad_norm=0.057
+[train] epoch=1/8 step=44/100 loss=0.021155 grad_norm=0.074
+[train] epoch=1/8 step=45/100 loss=0.021804 grad_norm=0.048
+[train] epoch=1/8 step=46/100 loss=0.019195 grad_norm=0.041
+[train] epoch=1/8 step=47/100 loss=0.018409 grad_norm=0.045
+[train] epoch=1/8 step=48/100 loss=0.019932 grad_norm=0.069
+[train] epoch=1/8 step=49/100 loss=0.020884 grad_norm=0.078
+[train] epoch=1/8 step=50/100 loss=0.021305 grad_norm=0.083
+[train] epoch=1/8 step=51/100 loss=0.020217 grad_norm=0.048
+[train] epoch=1/8 step=52/100 loss=0.017572 grad_norm=0.042
+[train] epoch=1/8 step=53/100 loss=0.021516 grad_norm=0.123
+[train] epoch=1/8 step=54/100 loss=0.018294 grad_norm=0.051
+[train] epoch=1/8 step=55/100 loss=0.023678 grad_norm=0.073
+[train] epoch=1/8 step=56/100 loss=0.018373 grad_norm=0.090
+[train] epoch=1/8 step=57/100 loss=0.015812 grad_norm=0.057
+[train] epoch=1/8 step=58/100 loss=0.018098 grad_norm=0.078
+[train] epoch=1/8 step=59/100 loss=0.022863 grad_norm=0.046
+[train] epoch=1/8 step=60/100 loss=0.018418 grad_norm=0.057
+[train] epoch=1/8 step=61/100 loss=0.019778 grad_norm=0.067
+[train] epoch=1/8 step=62/100 loss=0.020379 grad_norm=0.057
+[train] epoch=1/8 step=63/100 loss=0.023898 grad_norm=0.042
+[train] epoch=1/8 step=64/100 loss=0.022591 grad_norm=0.065
+[train] epoch=1/8 step=65/100 loss=0.021195 grad_norm=0.062
+[train] epoch=1/8 step=66/100 loss=0.015465 grad_norm=0.046
+[train] epoch=1/8 step=67/100 loss=0.020922 grad_norm=0.057
+[train] epoch=1/8 step=68/100 loss=0.019091 grad_norm=0.068
+[train] epoch=1/8 step=69/100 loss=0.019111 grad_norm=0.047
+[train] epoch=1/8 step=70/100 loss=0.017932 grad_norm=0.040
+[train] epoch=1/8 step=71/100 loss=0.022440 grad_norm=0.087
+[train] epoch=1/8 step=72/100 loss=0.016785 grad_norm=0.043
+[train] epoch=1/8 step=73/100 loss=0.020490 grad_norm=0.070
+[train] epoch=1/8 step=74/100 loss=0.024364 grad_norm=0.090
+[train] epoch=1/8 step=75/100 loss=0.022908 grad_norm=0.075
+[train] epoch=1/8 step=76/100 loss=0.019305 grad_norm=0.049
+[train] epoch=1/8 step=77/100 loss=0.019872 grad_norm=0.070
+[train] epoch=1/8 step=78/100 loss=0.020810 grad_norm=0.053
+[train] epoch=1/8 step=79/100 loss=0.014668 grad_norm=0.053
+[train] epoch=1/8 step=80/100 loss=0.022512 grad_norm=0.046
+[train] epoch=1/8 step=81/100 loss=0.021148 grad_norm=0.063
+[train] epoch=1/8 step=82/100 loss=0.022663 grad_norm=0.077
+[train] epoch=1/8 step=83/100 loss=0.016492 grad_norm=0.061
+[train] epoch=1/8 step=84/100 loss=0.019896 grad_norm=0.038
+[train] epoch=1/8 step=85/100 loss=0.019278 grad_norm=0.071
+[train] epoch=1/8 step=86/100 loss=0.023757 grad_norm=0.065
+[train] epoch=1/8 step=87/100 loss=0.021841 grad_norm=0.071
+[train] epoch=1/8 step=88/100 loss=0.023539 grad_norm=0.070
+[train] epoch=1/8 step=89/100 loss=0.016224 grad_norm=0.080
+[train] epoch=1/8 step=90/100 loss=0.022934 grad_norm=0.054
+[train] epoch=1/8 step=91/100 loss=0.019007 grad_norm=0.051
+[train] epoch=1/8 step=92/100 loss=0.024514 grad_norm=0.060
+[train] epoch=1/8 step=93/100 loss=0.021564 grad_norm=0.089
+[train] epoch=1/8 step=94/100 loss=0.021757 grad_norm=0.078
+[train] epoch=1/8 step=95/100 loss=0.017570 grad_norm=0.059
+[train] epoch=1/8 step=96/100 loss=0.021804 grad_norm=0.060
+[train] epoch=1/8 step=97/100 loss=0.018326 grad_norm=0.063
+[train] epoch=1/8 step=98/100 loss=0.017830 grad_norm=0.066
+[train] epoch=1/8 step=99/100 loss=0.028164 grad_norm=0.085
+[train] epoch=1/8 step=100/100 loss=0.023728 grad_norm=0.067
