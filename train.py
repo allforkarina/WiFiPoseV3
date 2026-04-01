@@ -385,19 +385,19 @@ def forward_pose_with_features(model: nn.Module, x: torch.Tensor) -> tuple[torch
 
 
 def split_indices_by_envs(
-	ds: AOASampleDataset,
-	val_env: str,
-	test_env: str,
+        ds: AOASampleDataset,
+        val_env: str,
+        test_env: str,
 ) -> tuple[list[int], list[int], list[int]]:
-	train_indices: list[int] = []
-	val_indices: list[int] = []
-	test_indices: list[int] = []
-	
+        train_indices: list[int] = []
+        val_indices: list[int] = []
+        test_indices: list[int] = []
+
         import sys
         train_env_str = ""
         if '--train_env' in sys.argv:
-            train_env_str = sys.argv[sys.argv.index('--train_env') + 1]
-            
+                train_env_str = sys.argv[sys.argv.index('--train_env') + 1]
+
         train_envs = [e.strip() for e in train_env_str.split(',')] if train_env_str else []
         val_envs = [e.strip() for e in val_env.split(',')]
         test_envs = [e.strip() for e in test_env.split(',')]
@@ -410,9 +410,18 @@ def split_indices_by_envs(
                         test_indices.append(idx)
                 else:
                         if not train_envs or env_id in train_envs:
-	pin_memory: bool,
-	shuffle: bool,
-	use_stratified: bool,
+                                train_indices.append(idx)
+        return train_indices, val_indices, test_indices
+
+
+def build_subset_loader(
+        ds: AOASampleDataset,
+        indices: list[int],
+        batch_size: int,
+        num_workers: int,
+        pin_memory: bool,
+        shuffle: bool,
+        use_stratified: bool,
 ) -> DataLoader:
 	subset = Subset(ds, indices)
 	if use_stratified:
