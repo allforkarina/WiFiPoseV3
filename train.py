@@ -470,6 +470,8 @@ def build_dataloaders(
 	else:
 		val_loader = build_subset_loader(ds, val_indices, batch_size, num_workers, pin_memory, False, False)
 		test_loader = build_subset_loader(ds, test_indices, batch_size, num_workers, pin_memory, False, False)
+	
+	stats = {
 		"dataset_size": len(ds),
 		"train_size": len(train_indices),
 		"val_size": len(val_indices),
