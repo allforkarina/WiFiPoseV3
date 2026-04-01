@@ -1,6 +1,6 @@
 action_aux:
   dropout: 0.1
-  enable: false
+  enable: true
   lambda_cls: 0.2
   num_actions: 27
 aoa:
@@ -36,11 +36,11 @@ data_root: data
 dataset:
   batch_size: 64
   cache_in_memory: false
-  input_channels: 11
+  input_channels: 1
   input_length: 181
-  num_workers: 0
+  num_workers: 4
   pin_memory: true
-  window_size: 11
+  window_size: 1
 domain_adaptation:
   lambda_domain: 0.01
   use_dann: false

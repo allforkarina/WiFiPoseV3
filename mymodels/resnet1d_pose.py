@@ -72,6 +72,8 @@ class ResNet1DPose(nn.Module):
             dummy_backbone = self.backbone(dummy_stem)
             flat_size = dummy_backbone.view(1, -1).size(1)
 
+        self.feature_dim = flat_size
+        
         self.head = nn.Sequential(
             nn.Flatten(1),
             nn.Dropout(dropout),
