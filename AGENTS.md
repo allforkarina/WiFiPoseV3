@@ -41,29 +41,30 @@ Treat `configs/default.yaml` as the source of truth for data roots, split settin
 - Completed: 引入跨动作多样性损失 `lambda_inter_div=0.25` 开展单一变量控制实验，实验表明此损失将模型测试验证集指标表现降低至 `test_nMPJPE=0.2023`，但使得预测分布方差比 `variance_ratio_pred_over_target` 从 `0.07` 提升到 `0.1270`！
 - Completed: 下一步实验测试 `selection_mode=diversity_first` 是否能让 checkpoint 选择更偏向非坍缩解。实验表明此策略成功将最佳 Checkpoint 的 `variance_ratio` 进一步拔高到了惊人的 `0.6779`，但付出了精度受损的代价（`test_nMPJPE` 退化至 `0.2557`，且 `mse_pred_to_target` 达到了 `0.0539`）。这说明模型产出了差异极大的动作，但部分动作未能对齐真实标签。
 - Completed: 暂时搁置附加损失和多样性优化，为了定位“网络是否能够拟合训练集”以及“坍缩是否由于结构瓶颈导致”，完成了一次“纯净版 Vanilla”实验（关闭一切附加约束损失、多样性损失，关闭 Dropout 等，仅仅使用 Huber Loss）。测试结果表明：`train_nMPJPE=0.1972`，`test_nMPJPE=0.1950`，且 `mse_pred=0.0382` 甚至差于 `mse_meanpose=0.0373`。这证明在使用 ResNet1D（内置 `AdaptiveAvgPool1d`）以及当前 AoA 特征的数据结构下，网络连**训练集本身都无法真正过拟合**，其对空间特征的理解完全退化成了输出平均姿态。这指向了特征预处理机制和网络池化层的深层结构瓶颈！
-- In progress: 重构或梳理网络结构与特征提取逻辑，尤其是 `AdaptiveAvgPool1d` 的空间维度坍缩问题。
+- Completed: 移除 ResNet1D 中的 `AdaptiveAvgPool1d(1)` 并使用 `Flatten()` 进行单一环境 (env1) 过拟合实验 (Phase 1 Step 1.1)。结果发现 Train Loss 仍未出现断崖式下降，停留在 0.015-0.02的水平。证明仍然未能过拟合。
+- In progress: 启动 Phase 1 Step 1.2，引入 `ms_tcn_pose` 并增加 `window_size=11` 来引入时序信息，测试能否打破单帧歧义并实现单环境过拟合。
 - Pending: 重新引入 `action_aux` 动作监督或其他抗坍缩损失需要在网络有足够的表征容量以分离输入特征后再次测试。
 - Pending: keep all validation and test execution aligned to the `WiFiPose` conda environment to avoid environment-dependent regressions.
 
-## 测试 Plan
-- 第一阶段：先重新建立干净的控制组实验，只使用 `resnet1d + mean_rms + selection_mode=accuracy + zero diversity/action_aux`，重新产出 smoke、短程训练与完整 baseline 的最新结果。
-- 第二阶段：每个候选改动只允许变动一个因素，实验顺序固定为 `lambda_inter_div` -> `selection_mode=diversity_first` -> `action_aux`。
-- 第三阶段：每次实验统一保存训练日志、history、checkpoint 与评估输出，禁止未完成验证就继续叠加下一个改动。
-
-## 验证 Plan
-- 第一阶段：所有实验至少执行 `sanity_check/run_sanity_check.py` 或等价 smoke，确认前向、反向、优化器更新和数据加载正常。
-- 第二阶段：每轮实验训练后统一运行 `eval.py`、`diagnose_pose_collapse.py` 与 `tools/diagnose_input_pose_separability.py`，分别检查精度、坍缩程度与输入可分性。
-- 第三阶段：统一对照控制组指标 `val_nMPJPE≈0.1948`、`test_nMPJPE≈0.1943`、`variance_ratio≈0.057`、`mse_pred_to_target` 与 `mse_meanpose_to_target` 的关系。
-- 第四阶段：只有当改动在验证集和测试集上都成立，且结论可复现，才允许进入下一轮优化。
-
-## 优化 Plan
-- 第一阶段：优先提升跨样本和跨动作多样性，核心目标是在不明显破坏 `nMPJPE` 的前提下抬升 `variance_ratio_pred_over_target`、`pred_group_std_mean` 与动作间均值差异。
-- 第二阶段：如果 `lambda_inter_div` 证明有效，再评估 `selection_mode=diversity_first` 是否能让 checkpoint 选择更偏向非坍缩解。
-- 第三阶段：只有当前两项有明确收益后，再加入 `action_aux`，判断动作监督能否进一步拉开动作间表征。
-- 第四阶段：当抗坍缩最优组合稳定后，再回到 `pelvis_torso` 与 `mean_rms` 的语义一致性问题，确认不会重新引入坐标系回归。
+## 测试与验证 Plan (Phase 1-4)
+- **Phase 1：打通信息管道（核心：打破信息阻断，恢复过拟合能力）**
+  - 目标：确保模型能通过死记硬背拟合训练集，观察 Train Loss 断崖式下降，Train nMPJPE 降至 0.05 以下。
+  - Step 1.1：架构特征解封。在单环境下使用纯 MSE/SmoothL1 Loss，替换 ResNet1D 中的 `AdaptiveAvgPool1d(1)` 为 `Flatten()` 以保留空间分辨率。
+  - Step 1.2：时序信息引入。如 1.1 失败，则切换至 `ms_tcn_pose` 并增加 `window_size` 以打破单帧歧义。
+  - Step 1.3：单一 Batch 极限测试。关闭 Shuffle 用单 batch 过拟合 500 个 Epoch 排查数据纯度和梯度传导。
+- **Phase 2：重塑数据与标签空间**
+  - 目标：特征清晰，标签稳健。
+  - Step 2.1：退回最稳健的标签归一化。放弃 `pelvis_torso`，退回稳定的 `mean_rms` 模式。
+  - Step 2.2：检查输入 AoA 的动态截断。探索 `_normalize_aoa` 从逐帧 Min-Max 改为全局固定最大最小值。
+- **Phase 3：基础结构化约束的谨慎回归**
+  - 目标：确认极强拟合能力后，让其“长得更像人”。
+  - Step 3.1：加入骨长与角度损失。Test 出现退化后，引入 `lambda_dist` 和 `lambda_rel` 损失。
+  - Step 3.2：防塌缩正则化。极缓慢引入多样本差异约束 `lambda_inter_div` 预防微小动作模糊。
+- **Phase 4：跨域与泛化验证**
+  - 目标：解决真实的跨环境问题。
+  - Step 4.1：多环境联合训练 (env1~3)。
+  - Step 4.2：跨环境 Zero-Shot 测试 (env4)，严重掉点则考虑域适应（DANN）。
 
 ## 新周期目标
-- 目标一：把当前工作流重置为“先测试、再验证、后优化”的稳定循环，而不是并行混改。
-- 目标二：维持或接近当前 `test_nMPJPE≈0.1943` 的精度水平，同时让预测分布显著摆脱平均姿态收缩。
-- 目标三：让 `diagnose_pose_collapse.py` 中的 `variance_ratio_pred_over_target` 明显高于当前约 `0.07`，并使 `mse_pred_to_target` 稳定优于 `mse_meanpose_to_target`。
-- 目标四：形成一套可以直接复用到后续模型、损失和归一化实验中的标准验证流程。
+- 目标一：通过打通信息管道彻底解决平均姿态塌缩的本因缺失。
+- 目标二：分阶段、循序渐进地引入各种防塌损失设计与坐标归一，每一步均以是否出现断崖过拟合作为基线验证标准。

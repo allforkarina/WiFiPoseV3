@@ -36,11 +36,11 @@ data_root: data
 dataset:
   batch_size: 64
   cache_in_memory: false
-  input_channels: 1
+  input_channels: 11
   input_length: 181
   num_workers: 4
   pin_memory: true
-  window_size: 1
+  window_size: 11
 domain_adaptation:
   lambda_domain: 0.01
   use_dann: false
@@ -97,7 +97,7 @@ loss:
   lambda_reg: 0.0
   lambda_sym: 0.0
   lambda_var: 0.0
-  normalize_mode: pelvis_torso
+  normalize_mode: mean_rms
   preserve_ratio: 0.6
 misc:
   deterministic: false
@@ -105,9 +105,9 @@ misc:
 model:
   dropout: 0.0
   hidden_dim: 256
-  input_channels: 1
+  input_channels: 11
   input_length: 181
-  name: conv1d_baseline
+  name: ms_tcn_pose
 preprocess_version: v1.1
 raw_data_root: data/dataset
 splits:

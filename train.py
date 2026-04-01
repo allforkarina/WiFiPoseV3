@@ -392,6 +392,13 @@ def split_indices_by_envs(
 	train_indices: list[int] = []
 	val_indices: list[int] = []
 	test_indices: list[int] = []
+	
+	# Extract explicitly supplied train_env if provided in arguments (sys.argv check hack)
+	import sys
+	train_env = None
+	if '--train_env' in sys.argv:
+		train_env = sys.argv[sys.argv.index('--train_env') + 1]
+
 	for idx, (_, sample, _) in enumerate(ds.index):
 		env_id = sample_to_env(sample)
 		if env_id == val_env:
@@ -399,7 +406,8 @@ def split_indices_by_envs(
 		elif env_id == test_env:
 			test_indices.append(idx)
 		else:
-			train_indices.append(idx)
+			if train_env is None or env_id == train_env:
+				train_indices.append(idx)
 	return train_indices, val_indices, test_indices
 
 
@@ -473,7 +481,7 @@ def build_model(cfg: Dict[str, Any], device: torch.device, model_name_override: 
 	model_name = (model_name_override or mcfg.get("name", "conv1d_baseline")).lower()
 	effective_window = int(window_size if window_size is not None else cfg.get("dataset", {}).get("window_size", 1))
 	common_kwargs = {
-		"input_channels": effective_window if model_name in {"conv1d_baseline", "resnet1d"} else mcfg.get("input_channels", 1),
+		"input_channels": effective_window if model_name in {"conv1d_baseline", "resnet1d", "ms_tcn_pose"} else mcfg.get("input_channels", 1),
 		"input_length": mcfg.get("input_length", 181),
 		"hidden_dim": mcfg.get("hidden_dim", 256),
 		"num_joints": mcfg.get("output_joints", 17),
@@ -868,6 +876,7 @@ def main() -> None:
 	parser.add_argument("--labels_root", type=str, default=None)
 	parser.add_argument("--val_env", type=str, default="env3")
 	parser.add_argument("--test_env", type=str, default="env4")
+	parser.add_argument("--train_env", type=str, default=None)
 	parser.add_argument("--epochs", type=int, default=None)
 	parser.add_argument("--model_name", type=str, default=None, help="conv1d_baseline | resnet1d | ms_tcn_pose")
 	parser.add_argument("--window_size", type=int, default=None, help="Temporal AoA window size; even values are rounded up")

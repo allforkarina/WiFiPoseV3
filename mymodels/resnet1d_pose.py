@@ -64,11 +64,18 @@ class ResNet1DPose(nn.Module):
             ResidualBlock1D(mid_dim, hidden_dim, stride=2, dropout=dropout),
             ResidualBlock1D(hidden_dim, hidden_dim, stride=1, dropout=dropout),
         )
-        self.pool = nn.AdaptiveAvgPool1d(1)
+        
+        # Pass a dummy tensor to correctly calculate the flattened size after dynamic temporal decimation
+        dummy_in = torch.zeros(1, input_channels, input_length)
+        with torch.no_grad():
+            dummy_stem = self.stem(dummy_in)
+            dummy_backbone = self.backbone(dummy_stem)
+            flat_size = dummy_backbone.view(1, -1).size(1)
+
         self.head = nn.Sequential(
-            nn.Flatten(),
+            nn.Flatten(1),
             nn.Dropout(dropout),
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(flat_size, hidden_dim),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, num_joints * out_dim),
@@ -79,8 +86,7 @@ class ResNet1DPose(nn.Module):
             x = x.unsqueeze(1)
         feats = self.stem(x)
         feats = self.backbone(feats)
-        pooled = self.pool(feats)
-        return torch.flatten(pooled, 1)
+        return torch.flatten(feats, 1)
 
     def forward_head(self, feats: Tensor) -> Tensor:
         out = self.head[1:](self.head[0](feats))
