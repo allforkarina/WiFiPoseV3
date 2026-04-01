@@ -46,27 +46,28 @@ Treat `configs/default.yaml` as the source of truth for data roots, split settin
 - Completed: 启动 Phase 1 Step 1.3，极大简化数据复杂度：关闭 Shuffle 用单一 Batch (batch_size=64) 极其暴力地迭代 500 次，以此来排查数据纯度和网络基础前传梯度是否完全正常。结果表明：在短短的 20 个 epochs 左右，模型 `train_loss` 迅速崩塌，并在 260 轮达到 `loss=0.000003` 且 `grad_norm=0.000`，实现了绝对的单样本记忆层级过拟合。这彻底证明了：**模型代码无 Bug、梯度传导完全正常、标签缩放范围合理。核心矛盾彻底落在了数据集的多样性映射上（同特征存在过多矛盾动作，或特征空间完全散乱），导致模型一旦引入跨 Batch 梯度立即发生坍缩拉平。**
 - Completed: 更新 Phase 2 - Phase 4 最新研究计划，将核心矛盾锚定在 AOA 数据的预处理一致性和标签空间收敛上。
 - Completed: 执行 Phase 2 Step 2.1，废除了 AOA 中的逐帧动态截断归一化，改为 `-25.0 ~ 0.0` 的全局固定物理阈值 Min-Max 缩放，真正保留了静态帧与剧烈动作帧在全局上的真实能量响应差异。
-- In progress: Phase 2 Step 2.2，将退回最保守的 `mean_rms` 标签归一化空间，筹备开展单环境（Env1）全量训练并观测是否成功打破平均坍缩。
-- Pending: 重新引入 `action_aux` 动作监督或其他抗坍缩损失需要在网络有足够的表征容量以分离输入特征后再次测试。
-- Pending: keep all validation and test execution aligned to the `WiFiPose` conda environment to avoid environment-dependent regressions.
+- Completed: 执行 Phase 2 Step 2.2，退回 `mean_rms` 标签归一化，跑单环境全量数据 (Env1)。测试表明即使在全局截断下，依然未能打破塌缩。Epoch 1 结束时 `train_loss=0.0224`，验证集 `val_nmpjpe=0.1989`，且 `train_std_ratio=0.1705` 依然深陷死水区（距离破 0.10、回升 0.5 的目标极远），这表明数据内部即使清理了归一化带来的额外畸变，其宏观映射依然存在深层的多对一交叉发散（同样的特征存在矛盾解）。
+- Completed: Phase 2 未能完全恢复全量的过拟合，依据计划启动 Phase 3 多任务辅助分支（Action Auxiliary），强行用类别标签撕开特征空间分布。10 epochs 训练显示 `train_action_acc=72.5%`，`val_action_acc=3.4%`。
+- Completed: 根据 Phase 3 实验结论，环境多径极度过拟合并且语义到坐标存在非线性映射断层，全面更新优化策略 Phase 1-3。
+- Completed: Phase 1 Step 1.1 执行完毕，`aoa_dataset.py` 加入了与上一帧的数据作差的特征提取（Temporal Difference），以剥离静态反射。
+- Pending: Phase 2 Step 2.1 升级非线性回归头（Deep MLP Head）。
+- Pending: 在打通前序步骤后，开启多环境联合训练 (Phase 1 Step 1.2)。
 
-## 测试与验证 Plan (Phase 1-4)
-- **Phase 1：打通信息管道（核心：打破信息阻断，恢复过拟合能力）**
-  - 目标：确保模型能通过死记硬背拟合训练集，观察 Train Loss 断崖式下降，Train nMPJPE 降至 0.05 以下。
-  - Step 1.1：架构特征解封。在单环境下使用纯 MSE/SmoothL1 Loss，替换 ResNet1D 中的 `AdaptiveAvgPool1d(1)` 为 `Flatten()` 以保留空间分辨率。
-  - Step 1.2：时序信息引入。如 1.1 失败，则切换至 `ms_tcn_pose` 并增加 `window_size` 以打破单帧歧义。
-  - Step 1.3：单一 Batch 极限测试。关闭 Shuffle 用单 batch 过拟合 500 个 Epoch 排查数据纯度和梯度传导。
-- **Phase 2：重塑数据与标签的“绝对一致性”（清洗燃料与标靶）**
-  - 目标：消除人工预处理引入的歧义。在单环境（Env1）下使用最基础的 MSE Loss 进行测试。
-  - Step 2.1：废除逐帧动态归一化，改为“全局/动作级归一化”。修改 `_normalize_aoa` 使用固定的物理阈值做 Min-Max 缩放，保留信号真实的能量强弱差异，让静止帧保持为接近 0 的低能量。
-  - Step 2.2：退回最保守的标签空间（Mean-RMS）。坚决使用 `mean_rms`，彻底杜绝因为某些人躯干倾斜导致的“坐标尺度爆炸”。检验跑单环境全量数据，看 Train nMPJPE 能否跌破 0.10，Train std ratio 能否回升到 0.5 以上。
-- **Phase 3：多任务辅助探针**
-  - 目标：如果 Phase 2 之后依然有一定坍缩，用多任务来诊断和辅助网络打通宏观信号到二维坐标的映射。
-  - Step 3.1：开启 Action Classification（动作分类）辅助分支。开启 `action_aux`。如果回归 Loss 下不去但分类 Accuracy 很高，说明输入特征有区分度但无法映射到细粒度坐标。分类 Loss 会强迫特征发散，打破平均坍缩。
-- **Phase 4：引入物理先验与结构化约束（兜底阶段）**
-  - 目标：恢复了全量数据上的过拟合能力后，为了提升测试集泛化性而做。
-  - Step 4.1：加入结构化先验损失。打开 `lambda_dist` (骨长) 和 `lambda_rel` (角度) 等损失，用“人体骨架的物理常识”纠正 AoA 信号天生的一对多模糊性。
-  - Step 4.2：极其谨慎地引入样本间排斥（Inter-Div Loss）。针对不同动作的样本开启 `lambda_inter_div` 强迫网络“遇到不同动作的标签时也必须把预测值拉开”。
+## 测试与验证 Plan (Phase 1-3)
+- **Phase 1：物理特征解耦与跨域重建（解决 3.4% 验证集识别率）**
+  - 目标：强行剥离网络对“单一房间静态反射（多径效应）”的死记硬背，逼迫 Backbone 只能去学“人体运动的动态频移”。
+  - Step 1.1：特征差分化（Temporal Difference / 动态滤波）。修改 `dataloader/aoa_dataset.py`，喂入网络相邻帧的差分（例如：$X_t - X_{t-1}$）以归零静态墙壁的绝对反射反射。
+  - Step 1.2：多环境联合训练（Data Mixture）。废弃单环境（Env1）训练，设定训练集包含 Env1、Env2、Env3，将 Env4 留作验证/测试集，破除环境死记硬背。
+  - Step 1.3：激活并实施 DANN 域对抗（Domain Adversarial）。开启环境变量 `domain_adaptation: use_dann: true`。接入环境分类器（Env Classifier）并通过梯度反转层与 Backbone 连接。
+- **Phase 2：回归头升维与语义引导（解决 0.39 方差塌缩）**
+  - 目标：解决即便认出了动作，却依然画不出坐标的问题，赋予回归头足够强大的解算能力。
+  - Step 2.1：升级非线性回归头（Deep MLP Head）。将 ResNet1D 中的 `nn.Linear` 回归头重构为深层的网络 (MLP)，使用 LayerNorm 与 GELU 连接深层节点以解决映射。
+  - Step 2.2：语义条件注入（Conditioned Regression）。在 forward 阶段将动作分类分支输出的 Logits，切断梯度后拼接 (Concat) 至回归头的输入中。
+- **Phase 3：物理先验与多样性约束（兜底与精调）**
+  - 目标：在前面打通“跨域特征”和“坐标映射”后，用 Loss 去约束不合理的人体比例。
+  - Step 3.1：保持绝对稳健的归一化底座。保留 `normalize_mode: "mean_rms"` 与全局经验阈值截断。
+  - Step 3.2：重新引入骨架物理约束。逐步将 `lambda_dist` 和 `lambda_rel` 调大。
+  - Step 3.3：最后引入样本间差异惩罚（Inter-Div Loss）。开启拉大样本姿态距离的损失项 `lambda_inter_div`。
 
 ## 新周期目标
 - 目标一：通过打通信息管道彻底解决平均姿态塌缩的本因缺失。
