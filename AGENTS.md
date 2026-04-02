@@ -50,19 +50,16 @@ Treat `configs/default.yaml` as the source of truth for data roots, split settin
 - Completed: Phase 2 未能完全恢复全量的过拟合，依据计划启动 Phase 3 多任务辅助分支（Action Auxiliary），强行用类别标签撕开特征空间分布。10 epochs 训练显示 `train_action_acc=72.5%`，`val_action_acc=3.4%`。
 - Completed: 根据 Phase 3 实验结论，环境多径极度过拟合并且语义到坐标存在非线性映射断层，全面更新优化策略 Phase 1-3。
 - Completed: Phase 1 Step 1.1 执行完毕，`aoa_dataset.py` 加入了与上一帧的数据作差的特征提取（Temporal Difference），以剥离静态反射。
-- Pending: Phase 2 Step 2.1 升级非线性回归头（Deep MLP Head）。
-- Pending: 在打通前序步骤后，开启多环境联合训练 (Phase 1 Step 1.2)。
+- Pending: [Phase 1 Baseline] 执行帧间差分多环境联合基线测试（Train: Env1+Env2, Val: Env3），利用 `action_aux` 探针观察特征解耦能力，并记录基线 `std_ratio`。
+- Pending: [Phase 2 Step 2.1] 升级非线性回归头（Deep MLP Head），加入 `LayerNorm` 和 `Dropout` 构建深层空间映射通道（输出17x2等价34维度）。
+- Pending: [Phase 2 Evaluation] 保持超参数与随机种子 (`--seed 42`) 绝对一致重跑验证，核验升维网络是否将测验集预测方差比 (std_ratio) 大幅拔升至 >0.8 并彻底打破坍缩。
 
-## 测试与验证 Plan (Phase 1-3)
-- **Phase 1：物理特征解耦与跨域重建（解决 3.4% 验证集识别率）**
-  - 目标：强行剥离网络对“单一房间静态反射（多径效应）”的死记硬背，逼迫 Backbone 只能去学“人体运动的动态频移”。
-  - Step 1.1：特征差分化（Temporal Difference / 动态滤波）。修改 `dataloader/aoa_dataset.py`，喂入网络相邻帧的差分（例如：$X_t - X_{t-1}$）以归零静态墙壁的绝对反射反射。
-  - Step 1.2：多环境联合训练（Data Mixture）。废弃单环境（Env1）训练，设定训练集包含 Env1、Env2、Env3，将 Env4 留作验证/测试集，破除环境死记硬背。
-  - Step 1.3：激活并实施 DANN 域对抗（Domain Adversarial）。开启环境变量 `domain_adaptation: use_dann: true`。接入环境分类器（Env Classifier）并通过梯度反转层与 Backbone 连接。
-- **Phase 2：回归头升维与语义引导（解决 0.39 方差塌缩）**
-  - 目标：解决即便认出了动作，却依然画不出坐标的问题，赋予回归头足够强大的解算能力。
-  - Step 2.1：升级非线性回归头（Deep MLP Head）。将 ResNet1D 中的 `nn.Linear` 回归头重构为深层的网络 (MLP)，使用 LayerNorm 与 GELU 连接深层节点以解决映射。
-  - Step 2.2：语义条件注入（Conditioned Regression）。在 forward 阶段将动作分类分支输出的 Logits，切断梯度后拼接 (Concat) 至回归头的输入中。
+## 测试与验证 Plan (Phase 1-3 优化执行版)
+- **Phase 1：物理特征解耦与跨域重建基线（解决 3.4% 跨域识别率）**
+  - 测试标准：确立 Temporal Difference 后的纯净跨域表现，观察 action_aux 的 validation accuracy 提升情况，并以此划定坍缩评价准星。
+- **Phase 2：回归头升维与非线性映射重构（解决 0.39 方差塌缩）**
+  - **模块重构**：移除单薄的线性头，替换为 `Linear -> LayerNorm -> GELU -> Dropout -> Linear -> LayerNorm -> GELU -> Linear(34)` 深层映射网络，以跨越语义到坐标点阵的断层。
+  - **绝地审判**：严格对齐基线测试的数据管线（同随机种子、同划分），以 `std_ratio` 是否断层拉升、以及测验集 `nMPJPE` 的真实表现为最终成果定论。
 - **Phase 3：物理先验与多样性约束（兜底与精调）**
   - 目标：在前面打通“跨域特征”和“坐标映射”后，用 Loss 去约束不合理的人体比例。
   - Step 3.1：保持绝对稳健的归一化底座。保留 `normalize_mode: "mean_rms"` 与全局经验阈值截断。

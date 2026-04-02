@@ -975,7 +975,7 @@ def main() -> None:
 		always=True,
 	)
 
-	model = build_model(cfg, device, args.model_name, window_size=window_size, num_envs=num_envs)
+	model = build_model(cfg, device, args.model_name, window_size=window_size)
 	action_aux_cfg = cfg.get("action_aux", {})
 	use_action_aux = bool(action_aux_cfg.get("enable", False))
 	lambda_action_cls = float(action_aux_cfg.get("lambda_cls", 0.0))

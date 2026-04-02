@@ -105,11 +105,16 @@ class ResNet1DPose(nn.Module):
 
         self.feature_dim = flat_size
         
+        # Phase 2 Step 2.1: Deep MLP Head with LayerNorm, GELU, and Dropout
         self.head = nn.Sequential(
             nn.Flatten(1),
+            nn.Linear(flat_size, hidden_dim * 2),
+            nn.LayerNorm(hidden_dim * 2),
+            nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(flat_size, hidden_dim),
-            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, num_joints * out_dim),
         )
