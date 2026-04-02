@@ -63,17 +63,23 @@ def grad_reverse(x, alpha=1.0):
 
 
 class ResNet1DPose(nn.Module):
-    """Residual 1D CNN for AoA -> normalized 2D pose."""
+    """
+    Residual 1D CNN for AoA (Angle of Arrival) -> normalized 2D pose mapping.
+    
+    This architecture is designed to map high-frequency 1D input signals (like Temporal Difference AoA features)
+    into 2D space coordinates. It employs a Deep MLP head with LayerNorm/Dropout to prevent
+    Variance Collapse and avoid overfitting to specific environmental multipath signatures.
+    """
 
     def __init__(
         self,
-        input_channels: int = 1,
-        input_length: int = 181,
-        hidden_dim: int = 256,
-        num_joints: int = 17,
-        out_dim: int = 2,
-        dropout: float = 0.2,
-        num_envs: int = 0, # Phase 1.3: DANN Classifier
+        input_channels: int = 1,     # Input channel (e.g., 1 for processed AoA frame)
+        input_length: int = 181,     # Length of the AoA bin spectrum
+        hidden_dim: int = 256,       # Base hidden dimension for MLPs and Convs
+        num_joints: int = 17,        # Fixed COCO 17-keypoint skeleton output
+        out_dim: int = 2,            # 2D coordinates (X, Y)
+        dropout: float = 0.2,        # Dropout probability to prevent severe overfitting
+        num_envs: int = 0,           # Set > 0 for Phase 1.3: DANN Environment Classifier
     ) -> None:
         super().__init__()
         self.num_joints = num_joints
@@ -84,11 +90,18 @@ class ResNet1DPose(nn.Module):
         base_dim = max(64, hidden_dim // 4)
         mid_dim = max(128, hidden_dim // 2)
 
+        # -------------------------------------------------------------
+        # Stem Layer: Quick down-sampling and channel expansion
+        # -------------------------------------------------------------
         self.stem = nn.Sequential(
             nn.Conv1d(input_channels, base_dim, kernel_size=7, padding=3, bias=False),
             nn.BatchNorm1d(base_dim),
             nn.ReLU(inplace=True),
         )
+        
+        # -------------------------------------------------------------
+        # Main Backbone: Extraction of abstract high-level representation
+        # -------------------------------------------------------------
         self.backbone = nn.Sequential(
             ResidualBlock1D(base_dim, base_dim, stride=1, dropout=dropout * 0.5),
             ResidualBlock1D(base_dim, mid_dim, stride=2, dropout=dropout * 0.5),
@@ -105,21 +118,26 @@ class ResNet1DPose(nn.Module):
 
         self.feature_dim = flat_size
         
-        # Phase 2 Step 2.1: Deep MLP Head with LayerNorm, GELU, and Dropout
+        # -------------------------------------------------------------
+        # Phase 2 Step 2.1: Deep MLP Regression Head (Anti-Collapse Barrier)
+        # Replaces narrow nn.Linear to enable proper decoding of abstract semantics.
+        # -------------------------------------------------------------
         self.head = nn.Sequential(
             nn.Flatten(1),
             nn.Linear(flat_size, hidden_dim * 2),
-            nn.LayerNorm(hidden_dim * 2),
+            nn.LayerNorm(hidden_dim * 2),     # Prevents deep gradient vanishing/explosion
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim * 2, hidden_dim),
-            nn.LayerNorm(hidden_dim),
+            nn.LayerNorm(hidden_dim),         # Stabilizes intermediate activations
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_dim, num_joints * out_dim),
+            nn.Linear(hidden_dim, num_joints * out_dim), # Final unconstrained [Batch, 34] projection
         )
 
-        # Phase 1.3: Environment Classifier for DANN
+        # -------------------------------------------------------------
+        # Phase 1.3: Environment Classifier for Domain Adversarial Training (DANN)
+        # -------------------------------------------------------------
         if num_envs > 0:
             self.env_classifier = nn.Sequential(
                 nn.Flatten(1),

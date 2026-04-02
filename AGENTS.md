@@ -33,6 +33,7 @@ Treat `configs/default.yaml` as the source of truth for data roots, split settin
 - After every meaningful change, update the `Current Optimization Targets` section in this file so the goal list stays current.
 
 ## Current Optimization Targets
+- **Completed**: (Tools) 工程剪枝。清理了过时的 Phase 1 工具脚本 `run_collapse_ablation.py` 与废弃的 `pure_vanilla_loss.yaml` 配置，为专注于 DANN 和 MLP 深层模型架构代码保持了干净的工作区。在模型代码中增加了模块设计意图与架构解耦的骨架注释。
 - Completed: clear stale `logs/` and `checkpoints/` outputs produced before the new `AOA_data` experiment cycle so subsequent validation starts from a clean artifact state.
 - Completed: use the new `AOA_data` features as the active training input with fixed per-frame percentile normalization; the `resnet1d + mean_rms + selection_mode=accuracy` baseline recovered to `val_nMPJPE=0.1948` and `test_nMPJPE=0.1943` under the 8x100 baseline budget.
 - Completed: establish a clean control baseline with `mean_rms`, `selection_mode=accuracy`, and zero diversity/action-aux losses on the fixed `AOA_data` preprocessing pipeline.

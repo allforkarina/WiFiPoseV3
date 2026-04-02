@@ -41,13 +41,21 @@ def resolve_checkpoint(checkpoint_arg: str | None) -> Path:
     return candidates[0]
 
 
+# -------------------------------------------------------------
+# Evaluation Tools & Metrics
+# -------------------------------------------------------------
 def inverse_pose(normalized_pose: torch.Tensor, meta: dict[str, Any]) -> np.ndarray:
-    center = np.asarray(meta["pose_center"], dtype=np.float32).reshape(1, 2)
+    """
+    Reverse the normalization applied during dataset extraction.
+    Transforms mean/rms normalized poses back to the original physical 2D plane scale for valid mpjpe calculation.
+    """
+    center = np.asarray(meta["pose_center"], dtype=np.float32).reshape(1, 2)    
     scale = float(np.asarray(meta["pose_scale"], dtype=np.float32).reshape(-1)[0])
     return (normalized_pose.detach().cpu().numpy() * scale) + center
 
 
 def build_action_index(ds: AOASampleDataset) -> dict[str, list[int]]:
+    """ Group dataset elements by actions for stratified (per-action) evaluation plot selection """
     action_to_indices: dict[str, list[int]] = defaultdict(list)
     for idx, (action, _, _) in enumerate(ds.index):
         action_to_indices[action].append(idx)

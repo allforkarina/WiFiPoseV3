@@ -1220,6 +1220,16 @@ def main() -> None:
 	)
 	logger.log(f"[assessment] status={assessment} reason={reason}", always=True)
 
+        # -------------------------------------------------------------
+        # Auto-Pruning: Keep only latest 10 artifacts to save disk space
+        # -------------------------------------------------------------
+        try:
+                import subprocess
+                import sys
+                prune_cmd = [sys.executable, str(PROJECT_ROOT / "tools" / "prune_run_artifacts.py"), "--keep", "10"]
+                subprocess.run(prune_cmd, check=True)
+                logger.log("[prune] Successfully kept the latest 10 artifacts.", always=True)
+        except Exception as e:
+                logger.log(f"[prune] Failed to prune artifacts: {e}", always=True)
 
-if __name__ == "__main__":
 	main()
