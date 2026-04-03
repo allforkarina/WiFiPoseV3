@@ -1,0 +1,170 @@
+# 基本版本与数据路径
+preprocess_version: "v1.1"          # 预处理版本标识（写入 .h5 metadata）
+data_root: "data"                   # 数据根目录（相对路径推荐）
+# 注意：数据目录结构为 action/sample/frame，环境信息由 sample 隐含（S01-S10->env1, S11-S20->env2, ...）
+# 已确认的原始数据和标签均位于 `data/dataset` 下，CSI 位于 Axx/Syy/wifi-csi，标签位于 Axx/Syy/rgb
+raw_data_root: "data/dataset"       # 原始 .mat 存放路径，结构：data/dataset/<Axx>/<Syy>/wifi-csi/frame*.mat
+aoa_cache_root: "AOA_data"          # 预处理后 .h5 存放路径（每样本 .h5），结构：AOA_data/<Axx>/<Syy>.h5
+labels_root: "AOA_data"             # 逐帧 .npy 标签根目录，结构：AOA_data/<Axx>/<Syy>/rgb/frame*.npy
+splits_root: "splits"               # splits json 存放目录
+logs_root: "logs"
+checkpoints_root: "checkpoints"
+
+# AOA / MUSIC 预处理参数
+aoa:
+  bins: 181                         # AOA 谱分辨率（固定为 181）
+  use_tof: false                    # 本项目暂不使用 TOF
+  
+# HDF5 打包参数（每样本一个 .h5）
+h5:
+  frames_per_sample: 297
+  compression: "gzip"               # 压缩类型（或 "" 表示不压缩）
+  compression_level: 4
+  chunk_frames: 32
+  write_atomic: true
+
+# 数据一致性与校验
+verify:
+  require_frame_count: 297
+  skip_bad_samples: true
+  bad_samples_log: "data/bad_samples.log"
+  compute_sha256: true
+
+# Dataset / DataLoader
+dataset:
+  input_channels: 1
+  input_length: 181
+  window_size: 1                    # 若使用短时窗口，可设置为 3/5（本项目默认单帧）
+  batch_size: 64
+  num_workers: 4                    # 多核
+  pin_memory: true
+  cache_in_memory: false
+
+# 数据增强
+augmentation:
+  enable: true
+  prob_noise: 0.5                   # 噪声
+  noise_std: 0.02
+  prob_gain: 0.3
+  gain_range: [0.8, 1.2]
+  prob_bin_dropout: 0.2
+  max_dropout_bins: 5
+  aoa_shift_bins: 1                 # ±1 bin 随机移位
+
+# 模型配置（可扩展）
+model:
+  name: "resnet1d"                  # conv1d_baseline | resnet1d | ms_tcn_pose
+  input_channels: 1
+  input_length: 181
+  hidden_dim: 256
+  dropout: 0.2
+  output_joints: 17
+  output_dim: 2
+
+# 训练超参
+train:
+  device: "cuda:0"
+  seed: 42
+  epochs: 100
+  optimizer: "AdamW"
+  lr: 3e-4
+  weight_decay: 1e-4
+  grad_clip: 1.0
+  lr_scheduler:
+    name: "cosine"                  # 余弦退火
+    warmup_epochs: 5
+
+# 损失与权重（以“姿态相似”为核心，消除平移与尺度，但考虑旋转）
+loss:
+  normalize_mode: "mean_rms"        # Phase 2: mean_rms 解决塌缩的核心标签归一化
+  lambda_pose: 1.0                  # 主损失：normalized MPJPE (Huber或L2)
+  lambda_dir: 1.0                   # 骨向余弦损失
+  lambda_angle: 0.5                 # 关节角误差
+  lambda_len: 1.0                   # 骨长比例一致性
+  lambda_sym: 0.1                   # 对称性
+  lambda_reg: 0.01                  # 防塌缩 soft constraint
+  lambda_var: 0.0                   # 旧的 batch variance 约束默认关闭，避免与跨样本差异约束冲突
+  lambda_batch_div: 0.0             # 全体样本对的通用差异约束，进阶策略中默认关闭
+  batch_div_schedule:
+    enable: false
+    name: "rise_fall"               # fixed | linear | rise_fall
+    start: 0.3                      # 前期保持稳定回归
+    peak: 0.6                       # 中期增强姿态差异，进一步压制平均姿态
+    end: 0.4                        # 后期回落一点，避免只追多样性而损失贴合度
+    peak_epoch_ratio: 0.4
+  lambda_inter_div: 0.0             # Phase 2中已退回0，专注于基础回归
+  inter_div_schedule:
+    enable: true
+    name: "rise_fall"
+    start: 0.25
+    peak: 0.55
+    end: 0.35
+    peak_epoch_ratio: 0.45
+  lambda_intra_div: 0.0             # 同动作样本对默认不额外拉开
+  intra_div_schedule:
+    enable: false
+    name: "fixed"
+    start: 0.0
+  preserve_ratio: 0.6               # pred std 至少保留 target std 的该比例
+  huber_delta: 1.0
+
+# 动作辅助监督：在使用 Deep MLP Head 时，用于诊断特征纯度
+action_aux:
+  enable: true
+  num_actions: 27
+  lambda_cls: 0.2
+  dropout: 0.1
+
+# 泛化 / 域适应开关
+domain_adaptation:
+  use_dann: false
+  use_mmd: false
+  lambda_domain: 0.01
+
+# 评估与度量
+eval:
+  metrics:
+    - "N-MPJPE"
+    - "TorsoOrientationError"
+    - "BoneCosine"
+    - "JointAngleRMSE"
+    - "PCK"                         # PCK 使用归一化尺度
+  pck_thresholds: [0.05, 0.1]
+
+# Checkpoint / logging
+checkpoint:
+  save_top_k: 3
+  monitor: "val/N-MPJPE"
+  mode: "min"
+  save_interval_epochs: 1
+  resume: false
+  resume_checkpoint: ""
+  selection:
+    mode: "diversity_first"         # accuracy | diversity_first
+    pair_ratio_weight: 1.0
+    std_ratio_weight: 0.35
+    inter_pair_ratio_weight: 0.15
+    nmpjpe_penalty: 0.02
+
+logging:
+  use_wandb: false
+  wandb_project: "wifi_aoa_pose"
+  log_interval_steps: 10
+
+# LOEO splits config（示例）
+splits:
+  protocol: "LOEO"
+  folds: 4
+  splits_dir: "splits"
+  # sample->env 映射规则（用于在无 env 目录时推断环境）
+  sample_env_rule:
+    group_size: 10    # 每 group_size 个样本属于同一环境
+    env_prefix: "env" # env id 格式为 env1, env2 ...
+
+# 说明：示例 sample id 格式为 S01..S40，按数字段映射到环境。
+
+# 其他
+misc:
+  verbose: true
+  deterministic: false
+
