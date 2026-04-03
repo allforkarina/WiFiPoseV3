@@ -264,6 +264,7 @@ def build_dataloaders(
 	if not train_indices:
 		raise RuntimeError("Training split is empty")
 
+	train_envs_seen = sorted(list(set(sample_to_env(ds.index[idx][1]) for idx in train_indices)))
 	train_loader = build_subset_loader(ds, train_indices, batch_size, num_workers, pin_memory, True)
 	val_loader = build_subset_loader(ds, val_indices, batch_size, num_workers, pin_memory, False)
 	test_loader = build_subset_loader(ds, test_indices, batch_size, num_workers, pin_memory, False)
@@ -275,11 +276,12 @@ def build_dataloaders(
 		"test_size": len(test_indices),
 		"batch_size": batch_size,
 		"window_size": window_size,
+		"train_envs": train_envs_seen,
 	}
 	return train_loader, val_loader, test_loader, stats
 
 
-def build_model(cfg: Dict[str, Any], device: torch.device, window_size: int | None = None) -> nn.Module:
+def build_model(cfg: Dict[str, Any], device: torch.device, window_size: int | None = None, num_envs: int = 0) -> nn.Module:
 	mcfg = cfg.get("model", {})
 	model_name = mcfg.get("name", "resnet1d").lower()
 	effective_window = int(window_size if window_size is not None else cfg.get("dataset", {}).get("window_size", 1))
@@ -290,6 +292,7 @@ def build_model(cfg: Dict[str, Any], device: torch.device, window_size: int | No
 		"num_joints": mcfg.get("output_joints", 17),
 		"out_dim": mcfg.get("output_dim", 2),
 		"dropout": mcfg.get("dropout", 0.2),
+		"num_envs": num_envs,
 	}
 	if model_name == "conv1d_baseline":
 		model = ConvBaseline(**common_kwargs)
@@ -364,6 +367,9 @@ def train_one_epoch(
 	num_epochs: int,
 	logger: TrainLogger,
 	log_interval: int,
+	use_dann: bool = False,
+	lambda_domain: float = 0.0,
+	env_to_id: dict[str, int] | None = None,
 ) -> tuple[float, Dict[str, float]]:
 	model.train()
 	if action_head is not None:
@@ -374,9 +380,12 @@ def train_one_epoch(
 	running_std_ratio = 0.0
 	running_action_cls_loss = 0.0
 	running_action_acc = 0.0
+	running_domain_loss = 0.0
+	running_domain_acc = 0.0
 	
 	grad_norms: list[float] = []
 	total_steps = len(loader)
+	import math
 
 	for step, (x, y, meta) in enumerate(loader):
 		x, y = x.to(device), y.to(device)
@@ -394,12 +403,29 @@ def train_one_epoch(
 			action_cls_loss = loss.detach().new_zeros(())
 			action_acc = loss.detach().new_zeros(())
 			
+		domain_loss = loss.detach().new_zeros(())
+		domain_acc = loss.detach().new_zeros(())
+		if use_dann and env_to_id is not None and hasattr(model, "forward_env"):
+			try:
+				env_ids = extract_meta_field(meta, "env_id")
+				env_targets = torch.tensor([env_to_id.get(eid, 0) for eid in env_ids], dtype=torch.long, device=device)
+				p = ((epoch - 1) * total_steps + step) / max(1, num_epochs * total_steps)
+				alpha = 2.0 / (1.0 + math.exp(-10 * p)) - 1.0
+				domain_logits = model.forward_env(features, alpha)
+				domain_loss = F.cross_entropy(domain_logits, env_targets)
+				domain_acc = (domain_logits.argmax(dim=1) == env_targets).float().mean()
+				loss = loss + (lambda_domain * domain_loss)
+			except Exception as e:
+				pass
+
 		loss.backward()
 		grad_norm = _compute_grad_norm(model, action_head)
 		
 		log_msg = f"[train] epoch={epoch}/{num_epochs} step={step+1}/{total_steps} loss={loss.item():.6f} grad_norm={grad_norm:.3f}"
 		if action_head is not None:
 			log_msg += f" acc={action_acc.item():.3f}"
+		if use_dann:
+			log_msg += f" d_loss={domain_loss.item():.4f} d_acc={domain_acc.item():.3f}"
 		logger.log(log_msg, always=((step + 1) % log_interval == 0 or step == 0))
 		
 		optimizer.step()
@@ -410,6 +436,8 @@ def train_one_epoch(
 		running_std_ratio += float(loss_parts["std_ratio"].item())
 		running_action_cls_loss += float(action_cls_loss.item())
 		running_action_acc += float(action_acc.item())
+		running_domain_loss += float(domain_loss.item())
+		running_domain_acc += float(domain_acc.item())
 
 	avg_loss = running_loss / max(1, total_steps)
 	stats = {
@@ -417,6 +445,8 @@ def train_one_epoch(
 		"std_ratio": running_std_ratio / max(1, total_steps),
 		"action_cls_loss": running_action_cls_loss / max(1, total_steps),
 		"action_acc": running_action_acc / max(1, total_steps),
+		"domain_loss": running_domain_loss / max(1, total_steps),
+		"domain_acc": running_domain_acc / max(1, total_steps),
 		"grad_norm": float(sum(grad_norms) / max(1, len(grad_norms))),
 	}
 	return avg_loss, stats
@@ -429,6 +459,8 @@ def evaluate(
 	device: torch.device,
 	criterion: PoseStructureLoss,
 	lambda_action_cls: float,
+	use_dann: bool = False,
+	env_to_id: dict[str, int] | None = None,
 ) -> tuple[float, float, dict[str, float]]:
 	model.eval()
 	if action_head is not None:
@@ -442,8 +474,11 @@ def evaluate(
 	total_std_ratio = 0.0
 	total_action_cls = 0.0
 	total_action_acc = 0.0
+	total_domain_loss = 0.0
+	total_domain_acc = 0.0
 
 	with torch.no_grad():
+		import math
 		for x, y, meta in loader:
 			x, y = x.to(device), y.to(device)
 			action_targets = build_action_targets(meta, device)
@@ -458,6 +493,18 @@ def evaluate(
 			else:
 				action_cls_loss = loss.detach().new_zeros(())
 				action_acc = loss.detach().new_zeros(())
+
+			domain_loss = loss.detach().new_zeros(())
+			domain_acc = loss.detach().new_zeros(())
+			if use_dann and env_to_id is not None and hasattr(model, "forward_env"):
+				try:
+					env_ids = extract_meta_field(meta, "env_id")
+					env_targets = torch.tensor([env_to_id.get(eid, 0) for eid in env_ids], dtype=torch.long, device=device)
+					domain_logits = model.forward_env(features, 1.0)
+					domain_loss = F.cross_entropy(domain_logits, env_targets)
+					domain_acc = (domain_logits.argmax(dim=1) == env_targets).float().mean()
+				except Exception as e:
+					pass
 				
 			err = nMPJPE(pred, y)
 			batch_size = x.size(0)
@@ -467,6 +514,8 @@ def evaluate(
 			total_std_ratio += float(loss_parts["std_ratio"].item()) * batch_size
 			total_action_cls += float(action_cls_loss.item()) * batch_size
 			total_action_acc += float(action_acc.item()) * batch_size
+			total_domain_loss += float(domain_loss.item()) * batch_size
+			total_domain_acc += float(domain_acc.item()) * batch_size
 			total_err += err.item() * batch_size
 			total_cnt += batch_size
 
@@ -475,6 +524,8 @@ def evaluate(
 		"std_ratio": total_std_ratio / max(1, total_cnt),
 		"action_cls_loss": total_action_cls / max(1, total_cnt),
 		"action_acc": total_action_acc / max(1, total_cnt),
+		"domain_loss": total_domain_loss / max(1, total_cnt),
+		"domain_acc": total_domain_acc / max(1, total_cnt),
 	}
 	return total_loss / max(1, total_cnt), total_err / max(1, total_cnt), parts
 
@@ -547,7 +598,15 @@ def main() -> None:
 	)
 	logger.log(f"[data] train={split_stats['train_size']} val={split_stats['val_size']} test={split_stats['test_size']}", always=True)
 
-	model = build_model(cfg, device, window_size=window_size)
+	# --- Env mapping ---
+	domain_cfg = cfg.get("domain_adaptation", {})
+	use_dann = bool(domain_cfg.get("use_dann", False))
+	lambda_domain = float(domain_cfg.get("lambda_domain", 0.01))
+	train_envs = split_stats.get("train_envs", [])
+	env_to_id = {env: idx for idx, env in enumerate(train_envs)}
+	logger.log(f"[dann] use_dann={use_dann}, lambda_domain={lambda_domain}, env_to_id={env_to_id}", always=True)
+
+	model = build_model(cfg, device, window_size=window_size, num_envs=len(env_to_id) if use_dann else 0)
 	
 	action_aux_cfg = cfg.get("action_aux", {})
 	use_action_aux = bool(action_aux_cfg.get("enable", False))
@@ -600,9 +659,10 @@ def main() -> None:
 		
 		train_loss, train_stats = train_one_epoch(
 			model, action_head, train_loader, device, optimizer, criterion,
-			lambda_action_cls, ep, epochs, logger, log_interval=10
+			lambda_action_cls, ep, epochs, logger, log_interval=10,
+			use_dann=use_dann, lambda_domain=lambda_domain, env_to_id=env_to_id
 		)
-		val_loss, val_nm, val_parts = evaluate(model, action_head, val_loader, device, criterion, lambda_action_cls)
+		val_loss, val_nm, val_parts = evaluate(model, action_head, val_loader, device, criterion, lambda_action_cls, use_dann, env_to_id)
 		selection_score, selection_mode = compute_checkpoint_selection_score(val_nm, val_parts['std_ratio'], checkpoint_cfg)
 
 		history_rows.append({
@@ -622,8 +682,8 @@ def main() -> None:
 
 		logger.log(
 			f"[summary] Epoch {ep}/{epochs} | "
-			f"Train Loss: {train_loss:.4f} (Pose: {train_stats['pose_loss']:.4f}, StdRatio: {train_stats['std_ratio']:.3f}, Acc: {train_stats['action_acc']:.2%}) | "
-			f"Val   Loss: {val_loss:.4f} (nMPJPE: {val_nm:.4f}, StdRatio: {val_parts['std_ratio']:.3f}, Acc: {val_parts['action_acc']:.2%}) | "
+			f"Train Loss: {train_loss:.4f} (Pose: {train_stats['pose_loss']:.4f}, StdRatio: {train_stats['std_ratio']:.3f}, Acc: {train_stats['action_acc']:.2%}, D_Acc: {train_stats.get('domain_acc', 0.0):.2%}) | "
+			f"Val   Loss: {val_loss:.4f} (nMPJPE: {val_nm:.4f}, StdRatio: {val_parts['std_ratio']:.3f}, Acc: {val_parts['action_acc']:.2%}, D_Acc: {val_parts.get('domain_acc', 0.0):.2%}) | "
 			f"Score: {selection_score:.4f}",
 			always=True
 		)
@@ -639,8 +699,8 @@ def main() -> None:
 			logger.log(f"[ckpt] New best model saved (Score: {best_selection_score:.4f}, nMPJPE: {best_val:.4f})", always=True)
 
 	load_checkpoint(ckpt_path, model, extra_modules={"action_head": action_head})
-	train_loss, train_nm, train_parts = evaluate(model, action_head, train_loader, device, criterion, lambda_action_cls)
-	test_loss, test_nm, test_parts = evaluate(model, action_head, test_loader, device, criterion, lambda_action_cls)
+	train_loss, train_nm, train_parts = evaluate(model, action_head, train_loader, device, criterion, lambda_action_cls, use_dann, env_to_id)
+	test_loss, test_nm, test_parts = evaluate(model, action_head, test_loader, device, criterion, lambda_action_cls, use_dann, env_to_id)
 	
 	logger.log(f"[train eval] nMPJPE={train_nm:.4f}", always=True)
 	logger.log(f"[test eval] nMPJPE={test_nm:.4f} (Acc: {test_parts['action_acc']:.2%})", always=True)

@@ -117,9 +117,9 @@ action_aux:
 
 # 泛化 / 域适应开关
 domain_adaptation:
-  use_dann: false
+  use_dann: true
   use_mmd: false
-  lambda_domain: 0.01
+  lambda_domain: 0.1
 
 # 评估与度量
 eval:
