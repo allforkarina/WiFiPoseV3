@@ -4,8 +4,8 @@ data_root: "data"                   # 数据根目录（相对路径推荐）
 # 注意：数据目录结构为 action/sample/frame，环境信息由 sample 隐含（S01-S10->env1, S11-S20->env2, ...）
 # 已确认的原始数据和标签均位于 `data/dataset` 下，CSI 位于 Axx/Syy/wifi-csi，标签位于 Axx/Syy/rgb
 raw_data_root: "data/dataset"       # 原始 .mat 存放路径，结构：data/dataset/<Axx>/<Syy>/wifi-csi/frame*.mat
-aoa_cache_root: "data/aoa_cache"    # 预处理后 .h5 存放路径（每样本 .h5），结构：data/aoa_cache/<Axx>/<Syy>.h5
-labels_root: "data/dataset"         # 逐帧 .npy 标签根目录，结构：data/dataset/<Axx>/<Syy>/rgb/frame*.npy
+aoa_cache_root: "AOA_data"          # 预处理后 .h5 存放路径（每样本 .h5），结构：AOA_data/<Axx>/<Syy>.h5
+labels_root: "AOA_data"             # 逐帧 .npy 标签根目录，结构：AOA_data/<Axx>/<Syy>/rgb/frame*.npy
 splits_root: "splits"               # splits json 存放目录
 logs_root: "logs"
 checkpoints_root: "checkpoints"
@@ -53,7 +53,7 @@ augmentation:
 
 # 模型配置（可扩展）
 model:
-  name: "conv1d_baseline"           # conv1d_baseline | resnet1d | Transformer
+  name: "resnet1d"                  # conv1d_baseline | resnet1d | ms_tcn_pose
   input_channels: 1
   input_length: 181
   hidden_dim: 256
@@ -76,7 +76,7 @@ train:
 
 # 损失与权重（以“姿态相似”为核心，消除平移与尺度，但考虑旋转）
 loss:
-  normalize_mode: "pelvis_torso"    # pelvis center + torso scale（fallback到RMS）
+  normalize_mode: "mean_rms"        # Phase 2: mean_rms 解决塌缩的核心标签归一化
   lambda_pose: 1.0                  # 主损失：normalized MPJPE (Huber或L2)
   lambda_dir: 1.0                   # 骨向余弦损失
   lambda_angle: 0.5                 # 关节角误差
@@ -92,7 +92,7 @@ loss:
     peak: 0.6                       # 中期增强姿态差异，进一步压制平均姿态
     end: 0.4                        # 后期回落一点，避免只追多样性而损失贴合度
     peak_epoch_ratio: 0.4
-  lambda_inter_div: 0.25            # 重点拉开不同动作样本对
+  lambda_inter_div: 0.0             # Phase 2中已退回0，专注于基础回归
   inter_div_schedule:
     enable: true
     name: "rise_fall"
@@ -108,9 +108,9 @@ loss:
   preserve_ratio: 0.6               # pred std 至少保留 target std 的该比例
   huber_delta: 1.0
 
-# 动作辅助监督：不直接参与推理，但强制 backbone 特征区分 A01-A27
+# 动作辅助监督：在使用 Deep MLP Head 时，用于诊断特征纯度
 action_aux:
-  enable: false
+  enable: true
   num_actions: 27
   lambda_cls: 0.2
   dropout: 0.1
