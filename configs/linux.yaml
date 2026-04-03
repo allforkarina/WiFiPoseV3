@@ -3,9 +3,9 @@ preprocess_version: "v1.1"          # 预处理版本标识（写入 .h5 metadat
 data_root: "data"                   # 数据根目录（相对路径推荐）
 # 注意：数据目录结构为 action/sample/frame，环境信息由 sample 隐含（S01-S10->env1, S11-S20->env2, ...）
 # 已确认的原始数据和标签均位于 `data/dataset` 下，CSI 位于 Axx/Syy/wifi-csi，标签位于 Axx/Syy/rgb
-raw_data_root: "data/dataset"       # 原始 .mat 存放路径，结构：data/dataset/<Axx>/<Syy>/wifi-csi/frame*.mat
-aoa_cache_root: "AOA_data"          # 预处理后 .h5 存放路径（每样本 .h5），结构：AOA_data/<Axx>/<Syy>.h5
-labels_root: "AOA_data"             # 逐帧 .npy 标签根目录，结构：AOA_data/<Axx>/<Syy>/rgb/frame*.npy
+raw_data_root: "/data/WiFiPose/dataset/dataset"       # 原始 .mat 存放路径，结构：data/dataset/<Axx>/<Syy>/wifi-csi/frame*.mat
+aoa_cache_root: "/data/WiFiPose/dataset/AOA_data"          # 预处理后 .h5 存放路径（每样本 .h5），结构：AOA_data/<Axx>/<Syy>.h5
+labels_root: "/data/WiFiPose/dataset/dataset"             # 逐帧 .npy 标签根目录，结构：AOA_data/<Axx>/<Syy>/rgb/frame*.npy
 splits_root: "splits"               # splits json 存放目录
 logs_root: "logs"
 checkpoints_root: "checkpoints"
