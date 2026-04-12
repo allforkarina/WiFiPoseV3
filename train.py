@@ -189,6 +189,14 @@ def build_action_targets(meta: Any, device: torch.device) -> torch.Tensor:
 	return torch.tensor([action_to_index(action) for action in actions], dtype=torch.long, device=device)
 
 
+def resolve_optional_batch_limit(value: Any) -> int | None:
+	try:
+		limit = int(value)
+	except (TypeError, ValueError):
+		return None
+	return limit if limit > 0 else None
+
+
 def forward_pose_with_features(model: nn.Module, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
 	if not hasattr(model, "forward_features") or not hasattr(model, "forward_head"):
 		raise AttributeError("Model must implement forward_features() and forward_head() for anti-collapse training.")
@@ -370,6 +378,7 @@ def train_one_epoch(
 	use_dann: bool = False,
 	lambda_domain: float = 0.0,
 	env_to_id: dict[str, int] | None = None,
+	max_batches: int | None = None,
 ) -> tuple[float, Dict[str, float]]:
 	model.train()
 	if action_head is not None:
@@ -385,9 +394,12 @@ def train_one_epoch(
 	
 	grad_norms: list[float] = []
 	total_steps = len(loader)
+	effective_steps = min(total_steps, max_batches) if max_batches is not None else total_steps
 	import math
 
 	for step, (x, y, meta) in enumerate(loader):
+		if max_batches is not None and step >= max_batches:
+			break
 		x, y = x.to(device), y.to(device)
 		action_targets = build_action_targets(meta, device)
 		optimizer.zero_grad()
@@ -409,7 +421,7 @@ def train_one_epoch(
 			try:
 				env_ids = extract_meta_field(meta, "env_id")
 				env_targets = torch.tensor([env_to_id.get(eid, 0) for eid in env_ids], dtype=torch.long, device=device)
-				p = ((epoch - 1) * total_steps + step) / max(1, num_epochs * total_steps)
+				p = ((epoch - 1) * effective_steps + step) / max(1, num_epochs * effective_steps)
 				alpha = 2.0 / (1.0 + math.exp(-10 * p)) - 1.0
 				domain_logits = model.forward_env(features, alpha)
 				domain_loss = F.cross_entropy(domain_logits, env_targets)
@@ -421,7 +433,7 @@ def train_one_epoch(
 		loss.backward()
 		grad_norm = _compute_grad_norm(model, action_head)
 		
-		log_msg = f"[train] epoch={epoch}/{num_epochs} step={step+1}/{total_steps} loss={loss.item():.6f} grad_norm={grad_norm:.3f}"
+		log_msg = f"[train] epoch={epoch}/{num_epochs} step={step+1}/{effective_steps} loss={loss.item():.6f} grad_norm={grad_norm:.3f}"
 		if action_head is not None:
 			log_msg += f" acc={action_acc.item():.3f}"
 		if use_dann:
@@ -439,14 +451,15 @@ def train_one_epoch(
 		running_domain_loss += float(domain_loss.item())
 		running_domain_acc += float(domain_acc.item())
 
-	avg_loss = running_loss / max(1, total_steps)
+	actual_steps = max(1, min(total_steps, max_batches) if max_batches is not None else total_steps)
+	avg_loss = running_loss / actual_steps
 	stats = {
-		"pose_loss": running_pose_loss / max(1, total_steps),
-		"std_ratio": running_std_ratio / max(1, total_steps),
-		"action_cls_loss": running_action_cls_loss / max(1, total_steps),
-		"action_acc": running_action_acc / max(1, total_steps),
-		"domain_loss": running_domain_loss / max(1, total_steps),
-		"domain_acc": running_domain_acc / max(1, total_steps),
+		"pose_loss": running_pose_loss / actual_steps,
+		"std_ratio": running_std_ratio / actual_steps,
+		"action_cls_loss": running_action_cls_loss / actual_steps,
+		"action_acc": running_action_acc / actual_steps,
+		"domain_loss": running_domain_loss / actual_steps,
+		"domain_acc": running_domain_acc / actual_steps,
 		"grad_norm": float(sum(grad_norms) / max(1, len(grad_norms))),
 	}
 	return avg_loss, stats
@@ -461,6 +474,7 @@ def evaluate(
 	lambda_action_cls: float,
 	use_dann: bool = False,
 	env_to_id: dict[str, int] | None = None,
+	max_batches: int | None = None,
 ) -> tuple[float, float, dict[str, float]]:
 	model.eval()
 	if action_head is not None:
@@ -479,7 +493,9 @@ def evaluate(
 
 	with torch.no_grad():
 		import math
-		for x, y, meta in loader:
+		for step, (x, y, meta) in enumerate(loader):
+			if max_batches is not None and step >= max_batches:
+				break
 			x, y = x.to(device), y.to(device)
 			action_targets = build_action_targets(meta, device)
 			pred, features = forward_pose_with_features(model, x)
@@ -593,6 +609,21 @@ def main() -> None:
 	logger.log(f"[run] config={args.config} device={device} model={model_name}", always=True)
 	logger.log(f"[run] window_size={window_size} normalize_mode={resolve_normalize_mode(cfg)}", always=True)
 
+	debug_cfg = cfg.get("debug", {})
+	max_train_batches = resolve_optional_batch_limit(debug_cfg.get("max_train_batches"))
+	max_val_batches = resolve_optional_batch_limit(debug_cfg.get("max_val_batches"))
+	max_train_eval_batches = resolve_optional_batch_limit(debug_cfg.get("max_train_eval_batches"))
+	max_test_batches = resolve_optional_batch_limit(debug_cfg.get("max_test_batches"))
+	skip_artifact_prune = bool(debug_cfg.get("skip_artifact_prune", False))
+	if any(limit is not None for limit in (max_train_batches, max_val_batches, max_train_eval_batches, max_test_batches)):
+		logger.log(
+			f"[debug] max_train_batches={max_train_batches} max_val_batches={max_val_batches} "
+			f"max_train_eval_batches={max_train_eval_batches} max_test_batches={max_test_batches}",
+			always=True,
+		)
+	if skip_artifact_prune:
+		logger.log("[debug] artifact pruning disabled for this run", always=True)
+
 	train_loader, val_loader, test_loader, split_stats = build_dataloaders(
 		cfg=cfg, device=device, aoa_root=aoa_root, labels_root=labels_root, window_size=window_size
 	)
@@ -660,9 +691,11 @@ def main() -> None:
 		train_loss, train_stats = train_one_epoch(
 			model, action_head, train_loader, device, optimizer, criterion,
 			lambda_action_cls, ep, epochs, logger, log_interval=10,
-			use_dann=use_dann, lambda_domain=lambda_domain, env_to_id=env_to_id
+			use_dann=use_dann, lambda_domain=lambda_domain, env_to_id=env_to_id, max_batches=max_train_batches
 		)
-		val_loss, val_nm, val_parts = evaluate(model, action_head, val_loader, device, criterion, lambda_action_cls, use_dann, env_to_id)
+		val_loss, val_nm, val_parts = evaluate(
+			model, action_head, val_loader, device, criterion, lambda_action_cls, use_dann, env_to_id, max_batches=max_val_batches
+		)
 		selection_score, selection_mode = compute_checkpoint_selection_score(val_nm, val_parts['std_ratio'], checkpoint_cfg)
 
 		history_rows.append({
@@ -699,8 +732,12 @@ def main() -> None:
 			logger.log(f"[ckpt] New best model saved (Score: {best_selection_score:.4f}, nMPJPE: {best_val:.4f})", always=True)
 
 	load_checkpoint(ckpt_path, model, extra_modules={"action_head": action_head})
-	train_loss, train_nm, train_parts = evaluate(model, action_head, train_loader, device, criterion, lambda_action_cls, use_dann, env_to_id)
-	test_loss, test_nm, test_parts = evaluate(model, action_head, test_loader, device, criterion, lambda_action_cls, use_dann, env_to_id)
+	train_loss, train_nm, train_parts = evaluate(
+		model, action_head, train_loader, device, criterion, lambda_action_cls, use_dann, env_to_id, max_batches=max_train_eval_batches
+	)
+	test_loss, test_nm, test_parts = evaluate(
+		model, action_head, test_loader, device, criterion, lambda_action_cls, use_dann, env_to_id, max_batches=max_test_batches
+	)
 	
 	logger.log(f"[train eval] nMPJPE={train_nm:.4f}", always=True)
 	logger.log(f"[test eval] nMPJPE={test_nm:.4f} (Acc: {test_parts['action_acc']:.2%})", always=True)
@@ -708,12 +745,15 @@ def main() -> None:
 	assessment, reason = assess_fit(history_rows, test_nm)
 	logger.log(f"[assessment] {assessment}: {reason}", always=True)
 
-	try:
-		prune_cmd = [sys.executable, str(PROJECT_ROOT / "tools" / "prune_run_artifacts.py"), "--keep", "5"]
-		subprocess.run(prune_cmd, check=True)
-		logger.log("[prune] Kept the latest 5 artifacts.", always=True)
-	except Exception as e:
-		logger.log(f"[prune] Warn: Failed to prune {e}", always=True)
+	if skip_artifact_prune:
+		logger.log("[prune] Skipped artifact pruning for debug/smoke run.", always=True)
+	else:
+		try:
+			prune_cmd = [sys.executable, str(PROJECT_ROOT / "tools" / "prune_run_artifacts.py"), "--keep", "5"]
+			subprocess.run(prune_cmd, check=True)
+			logger.log("[prune] Kept the latest 5 artifacts.", always=True)
+		except Exception as e:
+			logger.log(f"[prune] Warn: Failed to prune {e}", always=True)
 
 if __name__ == "__main__":
 	main()
