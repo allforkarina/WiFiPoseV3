@@ -1,4 +1,4 @@
-# Linux formal DANN variant: matched to the diversity-first non-DANN baseline.
+# Linux formal DANN variant with accuracy-first checkpointing guarded by a std-ratio floor.
 preprocess_version: "v2.1"
 data_root: "data"
 raw_data_root: "/data/WiFiPose/dataset/dataset"
@@ -125,19 +125,22 @@ checkpoint:
   save_interval_epochs: 1
   resume: false
   resume_checkpoint: ""
-  save_path: "checkpoints/linux_dann_diversity_ckpt.pth"
+  save_path: "checkpoints/linux_dann_balanced_ckpt.pth"
   selection:
-    mode: "diversity_first"
+    mode: "balanced"
     pair_ratio_weight: 1.0
     std_ratio_weight: 0.35
     inter_pair_ratio_weight: 0.15
     nmpjpe_penalty: 0.02
+    std_floor: 0.8
+    std_bonus_weight: 0.02
+    std_penalty_weight: 0.20
 
 logging:
   use_wandb: false
   wandb_project: "wifi_aoa_pose"
   log_interval_steps: 10
-  run_name: "linux_dann_diversity"
+  run_name: "linux_dann_balanced"
 
 splits:
   protocol: "LOEO"

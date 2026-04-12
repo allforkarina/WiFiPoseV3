@@ -7,9 +7,12 @@ Core entry points are `train.py`, `eval.py`, and `diagnose_pose_collapse.py`. Mo
 Run commands from the repository root.
 
 - `python train.py --config configs/default.yaml` runs the default Windows-facing training config.
-- `python tools/run_windows_smoke.py` runs the fixed local smoke path with `configs/windows_smoke.yaml`.
-- `python tools/run_linux_formal.py --track non_dann` runs the formal non-DANN Linux track.
-- `python tools/run_linux_formal.py --track dann` runs the formal DANN Linux track.
+- `python tools/run_windows_smoke.py --track non_dann` runs the fixed local non-DANN smoke path.
+- `python tools/run_windows_smoke.py --track dann` runs the fixed local DANN smoke path.
+- `python tools/run_linux_formal.py --track non_dann --variant accuracy` runs the formal non-DANN accuracy-first track.
+- `python tools/run_linux_formal.py --track non_dann --variant balanced` runs the formal non-DANN balanced-selection track.
+- `python tools/run_linux_formal.py --track dann --variant accuracy` runs the formal DANN accuracy-first track.
+- `python tools/run_linux_formal.py --track dann --variant balanced` runs the formal DANN balanced-selection track.
 - `python eval.py --config configs/linux_non_dann.yaml --checkpoint checkpoints/<run>.pth` evaluates a saved checkpoint.
 - `python sanity_check/run_sanity_check.py --epochs 5 --device cpu` verifies the minimal forward/backward pipeline.
 - `python tools/prune_run_artifacts.py --keep 5` trims old tracked logs and checkpoints.
@@ -27,8 +30,9 @@ Use short imperative commit messages scoped to one change, such as `Add smoke co
 `configs/default.yaml` and `configs/linux.yaml` remain backward-compatible entry configs. Preferred current configs are:
 
 - `configs/windows_smoke.yaml` for local smoke-only validation
-- `configs/linux_non_dann.yaml` for the formal non-DANN track
-- `configs/linux_dann.yaml` for the formal DANN track
+- `configs/windows_smoke_dann.yaml` for local DANN smoke validation
+- `configs/linux_non_dann_accuracy.yaml`, `configs/linux_non_dann_balanced.yaml`, and `configs/linux_non_dann.yaml` for the non-DANN matrix
+- `configs/linux_dann_accuracy.yaml`, `configs/linux_dann_balanced.yaml`, and `configs/linux_dann.yaml` for the DANN matrix
 
 Keep `domain_adaptation.use_dann` disabled unless the active experiment is explicitly the DANN track.
 
@@ -45,19 +49,25 @@ Keep `domain_adaptation.use_dann` disabled unless the active experiment is expli
 - **Completed**: The formal pre-DANN baseline has been run on Linux (`train20260412_2206.log`) with `mean_rms + action_aux + Deep MLP head + diversity_first`.
 - **Completed**: The project is no longer primarily blocked by average-pose collapse. The active bottleneck is poor cross-environment generalization.
 - **Completed**: The workflow is now split into a Windows smoke path (`configs/windows_smoke.yaml`, `tools/run_windows_smoke.py`) and explicit Linux formal tracks (`configs/linux_non_dann.yaml`, `configs/linux_dann.yaml`, `tools/run_linux_formal.py`).
-- **Pending / Track A**: Improve the non-DANN line first by treating checkpoint selection as the main variable and optimizing for `val/test nMPJPE`, while keeping `std_ratio` and `action_aux` as diagnostics.
-- **Pending / Track B**: Run a strict DANN-vs-non-DANN comparison using matched seeds, splits, budgets, and checkpoint rules.
+- **Completed**: Track A code support is in place. The non-DANN line now has explicit `accuracy`, `balanced`, and `diversity` checkpoint-selection variants.
+- **Completed**: Track B code support is in place. The DANN line now mirrors the same `accuracy`, `balanced`, and `diversity` checkpoint-selection variants, and Windows can smoke-test the DANN path locally.
+- **Completed**: `eval.py` has been re-aligned with the current `train.py` interfaces so the formal evaluation path is runnable again.
+- **Pending / Track A**: Run the Linux non-DANN matrix and identify which checkpoint-selection rule produces the best `val/test nMPJPE`.
+- **Pending / Track B**: Run the matched Linux DANN matrix and compare against the Track A winner under the same seed, split, and training budget.
 
 ## Testing and Validation Plan
 - Windows validation must use `configs/windows_smoke.yaml` and should only touch temporary outputs under `tmp/windows_smoke/`.
 - Every Linux formal run must produce tracked `logs/` and be compared with the current formal baseline.
+- The preferred formal comparison grid is:
+  - non-DANN: `accuracy`, `balanced`, `diversity`
+  - DANN: `accuracy`, `balanced`, `diversity`
 - The primary acceptance metric is always `val/test nMPJPE`.
 - `std_ratio`, `action_aux` validation accuracy, and domain-classifier metrics are secondary diagnostics and must not override worse pose accuracy.
 
 ## Current Workflow
 1. Update code or configs on Windows.
-2. Run `python tools/run_windows_smoke.py` inside `WiFiPose`.
+2. Run `python tools/run_windows_smoke.py --track <non_dann|dann>` inside `WiFiPose`.
 3. Update `AGENTS.md`, commit, and push.
-4. Pull on Linux and run the chosen formal track.
+4. Pull on Linux and run the chosen formal track and variant.
 5. Push formal `logs/` back to GitHub.
 6. Pull the new logs on Windows and update the next optimization target list.

@@ -1,12 +1,12 @@
-# Linux formal DANN variant: matched to the diversity-first non-DANN baseline.
-preprocess_version: "v2.1"
+# Windows smoke configuration for validating the DANN code path without running a full experiment.
+preprocess_version: "v1.1"
 data_root: "data"
-raw_data_root: "/data/WiFiPose/dataset/dataset"
-aoa_cache_root: "/data/WiFiPose/dataset/AOA_data"
-labels_root: "/data/WiFiPose/dataset/dataset"
+raw_data_root: "D:\\Files\\WiFi_Pose\\WiFiPoseV3\\data\\dataset"
+aoa_cache_root: "D:\\Files\\WiFi_Pose\\WiFiPoseV3\\data\\AOA_data"
+labels_root: "D:\\Files\\WiFi_Pose\\WiFiPoseV3\\data\\dataset"
 splits_root: "splits"
-logs_root: "logs"
-checkpoints_root: "checkpoints"
+logs_root: "tmp/windows_smoke/logs"
+checkpoints_root: "tmp/windows_smoke/checkpoints"
 
 aoa:
   bins: 181
@@ -29,9 +29,9 @@ dataset:
   input_channels: 1
   input_length: 181
   window_size: 1
-  batch_size: 64
-  num_workers: 8
-  pin_memory: true
+  batch_size: 8
+  num_workers: 0
+  pin_memory: false
   cache_in_memory: false
 
 augmentation:
@@ -54,16 +54,16 @@ model:
   output_dim: 2
 
 train:
-  device: "cuda:0"
+  device: "cpu"
   seed: 42
-  epochs: 100
+  epochs: 1
   optimizer: "AdamW"
   lr: 3e-4
   weight_decay: 1e-4
   grad_clip: 1.0
   lr_scheduler:
     name: "cosine"
-    warmup_epochs: 5
+    warmup_epochs: 1
 
 loss:
   normalize_mode: "mean_rms"
@@ -119,15 +119,15 @@ eval:
   pck_thresholds: [0.05, 0.1]
 
 checkpoint:
-  save_top_k: 3
+  save_top_k: 1
   monitor: "val/N-MPJPE"
   mode: "min"
   save_interval_epochs: 1
   resume: false
   resume_checkpoint: ""
-  save_path: "checkpoints/linux_dann_diversity_ckpt.pth"
+  save_path: "tmp/windows_smoke/checkpoints/windows_smoke_dann_ckpt.pth"
   selection:
-    mode: "diversity_first"
+    mode: "accuracy"
     pair_ratio_weight: 1.0
     std_ratio_weight: 0.35
     inter_pair_ratio_weight: 0.15
@@ -136,8 +136,8 @@ checkpoint:
 logging:
   use_wandb: false
   wandb_project: "wifi_aoa_pose"
-  log_interval_steps: 10
-  run_name: "linux_dann_diversity"
+  log_interval_steps: 1
+  run_name: "windows_smoke_dann"
 
 splits:
   protocol: "LOEO"
@@ -150,3 +150,10 @@ splits:
 misc:
   verbose: true
   deterministic: false
+
+debug:
+  max_train_batches: 1
+  max_val_batches: 1
+  max_train_eval_batches: 1
+  max_test_batches: 1
+  skip_artifact_prune: true

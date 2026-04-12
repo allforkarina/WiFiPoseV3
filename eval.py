@@ -4,6 +4,7 @@ import argparse
 import csv
 import random
 from collections import defaultdict
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,19 @@ def resolve_checkpoint(checkpoint_arg: str | None) -> Path:
     if not candidates:
         raise FileNotFoundError(f"No checkpoint found under {ckpt_dir}")
     return candidates[0]
+
+
+def resolve_eval_data_roots(
+    cfg: dict[str, Any],
+    aoa_cache_root: str | None,
+    labels_root: str | None,
+) -> tuple[Path, Path]:
+    merged_cfg = dict(cfg)
+    if aoa_cache_root is not None:
+        merged_cfg["aoa_cache_root"] = aoa_cache_root
+    if labels_root is not None:
+        merged_cfg["labels_root"] = labels_root
+    return resolve_data_roots(merged_cfg)
 
 
 # -------------------------------------------------------------
@@ -119,14 +133,19 @@ def main() -> None:
     else:
         device = torch.device(args.device)
 
-    aoa_root, labels_root = resolve_data_roots(cfg, args.aoa_cache_root, args.labels_root)
+    aoa_root, labels_root = resolve_eval_data_roots(cfg, args.aoa_cache_root, args.labels_root)
     checkpoint_path = resolve_checkpoint(args.checkpoint)
     ckpt = torch.load(checkpoint_path, map_location="cpu")
     ckpt_cfg = ckpt.get("config", cfg)
     window_size = int(args.window_size if args.window_size is not None else ckpt_cfg.get("dataset", {}).get("window_size", cfg.get("dataset", {}).get("window_size", 1)))
     normalize_mode = args.normalize_mode or resolve_normalize_mode(ckpt_cfg)
 
-    model = build_model(ckpt_cfg, device, args.model_name, window_size=window_size)
+    model_cfg = deepcopy(ckpt_cfg)
+    if args.model_name is not None:
+        model_cfg.setdefault("model", {})
+        model_cfg["model"]["name"] = args.model_name
+
+    model = build_model(model_cfg, device, window_size=window_size)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
 

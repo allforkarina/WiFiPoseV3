@@ -157,6 +157,15 @@ def compute_checkpoint_selection_score(
 		score = std_w * val_std_ratio - nm_penalty * val_nmpjpe
 		return score, "diversity_first"
 
+	if mode == "balanced":
+		std_floor = float(selection_cfg.get("std_floor", 0.8))
+		std_bonus_weight = float(selection_cfg.get("std_bonus_weight", 0.02))
+		std_penalty_weight = float(selection_cfg.get("std_penalty_weight", 0.20))
+		bonus = std_bonus_weight * min(val_std_ratio, std_floor)
+		penalty = std_penalty_weight * max(0.0, std_floor - val_std_ratio)
+		score = -float(val_nmpjpe) + bonus - penalty
+		return score, "balanced"
+
 	return -float(val_nmpjpe), mode
 
 
@@ -704,11 +713,16 @@ def main() -> None:
 			"train_pose": train_stats["pose_loss"],
 			"train_std_ratio": train_stats["std_ratio"],
 			"train_acc": train_stats["action_acc"],
+			"train_domain_loss": train_stats["domain_loss"],
+			"train_domain_acc": train_stats["domain_acc"],
 			"val_loss": val_loss,
 			"val_nmpjpe": val_nm,
 			"val_pose": val_parts["pose_loss"],
 			"val_std_ratio": val_parts["std_ratio"],
 			"val_acc": val_parts["action_acc"],
+			"val_domain_loss": val_parts["domain_loss"],
+			"val_domain_acc": val_parts["domain_acc"],
+			"selection_mode": selection_mode,
 			"selection_score": selection_score
 		})
 		save_history_csv(history_path, history_rows)

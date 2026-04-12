@@ -1,4 +1,4 @@
-# Linux formal baseline: Deep MLP head + temporal difference + action_aux, without DANN.
+# Linux formal baseline variant: Deep MLP head + temporal difference + action_aux, without DANN, diversity-first selection.
 preprocess_version: "v2.1"
 data_root: "data"
 raw_data_root: "/data/WiFiPose/dataset/dataset"
@@ -125,7 +125,7 @@ checkpoint:
   save_interval_epochs: 1
   resume: false
   resume_checkpoint: ""
-  save_path: "checkpoints/linux_non_dann_ckpt.pth"
+  save_path: "checkpoints/linux_non_dann_diversity_ckpt.pth"
   selection:
     mode: "diversity_first"
     pair_ratio_weight: 1.0
@@ -137,7 +137,7 @@ logging:
   use_wandb: false
   wandb_project: "wifi_aoa_pose"
   log_interval_steps: 10
-  run_name: "linux_non_dann"
+  run_name: "linux_non_dann_diversity"
 
 splits:
   protocol: "LOEO"
