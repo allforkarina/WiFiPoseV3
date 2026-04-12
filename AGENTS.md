@@ -21,5 +21,8 @@ This project relies on script-level validation rather than a formal `pytest` sui
 ## Commit & Pull Request Guidelines
 Recent history uses short, imperative commit messages such as `Implement DANN architecture with dynamic alpha scheduling` and `add linux trainning config`. Keep subjects concise, action-first, and scoped to one change. Pull requests should describe behavior changes, note config or data-path updates, and include metrics, logs, or screenshots when training behavior changes.
 
+## Agent-Specific Instructions
+Update this `AGENTS.md` file whenever the project is meaningfully changed so the repository guide stays current. All content in `AGENTS.md` must be written in English. Although the document is maintained in English, all user-facing replies in the session must be written in Chinese. After every project change, sync the latest work to GitHub with `git add`, `git commit`, and `git push`.
+
 ## Configuration & Data Notes
 Treat `configs/default.yaml` and `configs/linux.yaml` as the source of truth for paths, splits, and training defaults. Avoid hard-coding machine-specific paths in code; prefer configuration updates instead.
