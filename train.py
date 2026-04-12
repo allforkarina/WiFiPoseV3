@@ -709,9 +709,9 @@ def main() -> None:
 	logger.log(f"[assessment] {assessment}: {reason}", always=True)
 
 	try:
-		prune_cmd = [sys.executable, str(PROJECT_ROOT / "tools" / "prune_run_artifacts.py"), "--keep", "10"]
+		prune_cmd = [sys.executable, str(PROJECT_ROOT / "tools" / "prune_run_artifacts.py"), "--keep", "5"]
 		subprocess.run(prune_cmd, check=True)
-		logger.log("[prune] Kept the latest 10 artifacts.", always=True)
+		logger.log("[prune] Kept the latest 5 artifacts.", always=True)
 	except Exception as e:
 		logger.log(f"[prune] Warn: Failed to prune {e}", always=True)
 

@@ -8,8 +8,8 @@ Run commands from the repository root.
 
 - `python train.py --config configs/default.yaml` starts the main training loop with the default settings.
 - `python eval.py --config configs/default.yaml --checkpoint checkpoints/<run>.pth` evaluates a saved checkpoint and writes visualizations under `logs/eval/`.
-- `python sanity_check/run_sanity_check.py --epochs 5 --device cpu` runs a lightweight smoke test for forward, loss, backward, and optimizer flow.
 - `python tools/prune_run_artifacts.py --keep 5` keeps only the newest training, evaluation, and checkpoint artifacts.
+- `python sanity_check/run_sanity_check.py --epochs 5 --device cpu` runs a lightweight smoke test for forward, loss, backward, and optimizer flow.
 - `python preprocess/aoa_tof_estimation.py --help` shows preprocessing options for generating AoA caches.
 
 ## Coding Style & Naming Conventions
@@ -22,7 +22,7 @@ This project relies on script-level validation rather than a formal `pytest` sui
 Recent history uses short, imperative commit messages such as `Implement DANN architecture with dynamic alpha scheduling` and `add linux trainning config`. Keep subjects concise, action-first, and scoped to one change. Pull requests should describe behavior changes, note config or data-path updates, and include metrics, logs, or screenshots when training behavior changes.
 
 ## Agent-Specific Instructions
-Update this `AGENTS.md` file whenever the project is meaningfully changed so the repository guide stays current. All content in `AGENTS.md` must be written in English. Although the document is maintained in English, all user-facing replies in the session must be written in Chinese. After every project change, sync the latest work to GitHub with `git add`, `git commit`, and `git push`.
+Update this `AGENTS.md` file whenever the project is meaningfully changed so the repository guide stays current. All content in `AGENTS.md` must be written in English. Although the document is maintained in English, all user-facing replies in the session must be written in Chinese. After every project change, sync both the code and the generated `logs/` artifacts to GitHub with `git add`, `git commit`, and `git push`. Keep `logs/` trimmed to the most recent 5 versions by running `python tools/prune_run_artifacts.py --keep 5` regularly so the repository stays small enough for iterative optimization.
 
 ## Configuration & Data Notes
 Treat `configs/default.yaml` and `configs/linux.yaml` as the source of truth for paths, splits, and training defaults. Avoid hard-coding machine-specific paths in code; prefer configuration updates instead.

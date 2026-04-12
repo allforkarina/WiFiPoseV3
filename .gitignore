@@ -17,7 +17,6 @@ dist/
 # Data caches and large artifacts
 data/aoa_cache/
 data/*.h5
-logs/
 checkpoints/
 *.ckpt
 *.pth
@@ -58,6 +57,8 @@ htmlcov/
 
 # Logs
 *.log
+!logs/
+!logs/**
 
 # OneDrive/Office temp files
 ~$*
