@@ -8,12 +8,12 @@ import sys
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable
+from typing import Any, Callable, Dict, Iterable
 
 import torch
 import torch.nn.functional as F
 from torch import nn
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Dataset, Subset
 import yaml
 
 from dataloader.aoa_dataset import AOASampleDataset, sample_to_env
@@ -206,6 +206,82 @@ def resolve_optional_batch_limit(value: Any) -> int | None:
 	return limit if limit > 0 else None
 
 
+class AOAAugmentation:
+	def __init__(
+		self,
+		prob_noise: float = 0.0,
+		noise_std: float = 0.0,
+		prob_gain: float = 0.0,
+		gain_range: tuple[float, float] = (1.0, 1.0),
+		prob_bin_dropout: float = 0.0,
+		max_dropout_bins: int = 0,
+		aoa_shift_bins: int = 0,
+	) -> None:
+		self.prob_noise = float(prob_noise)
+		self.noise_std = float(noise_std)
+		self.prob_gain = float(prob_gain)
+		self.gain_range = (float(gain_range[0]), float(gain_range[1]))
+		self.prob_bin_dropout = float(prob_bin_dropout)
+		self.max_dropout_bins = max(0, int(max_dropout_bins))
+		self.aoa_shift_bins = max(0, int(aoa_shift_bins))
+
+	def __call__(self, x: torch.Tensor, y: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+		aug_x = x.clone()
+		if self.prob_gain > 0.0 and torch.rand(()) < self.prob_gain:
+			gain = torch.empty((), dtype=aug_x.dtype, device=aug_x.device).uniform_(*self.gain_range)
+			aug_x = aug_x * gain
+		if self.prob_noise > 0.0 and self.noise_std > 0.0 and torch.rand(()) < self.prob_noise:
+			aug_x = aug_x + torch.randn_like(aug_x) * self.noise_std
+		if self.prob_bin_dropout > 0.0 and self.max_dropout_bins > 0 and torch.rand(()) < self.prob_bin_dropout:
+			max_bins = min(self.max_dropout_bins, int(aug_x.size(-1)))
+			if max_bins > 0:
+				drop_width = int(torch.randint(1, max_bins + 1, (1,)).item())
+				start = int(torch.randint(0, aug_x.size(-1) - drop_width + 1, (1,)).item())
+				aug_x[..., start:start + drop_width] = 0.0
+		if self.aoa_shift_bins > 0:
+			shift = int(torch.randint(-self.aoa_shift_bins, self.aoa_shift_bins + 1, (1,)).item())
+			if shift != 0:
+				aug_x = torch.roll(aug_x, shifts=shift, dims=-1)
+		return aug_x, y
+
+
+class TransformingDataset(Dataset):
+	def __init__(
+		self,
+		base_dataset: Dataset,
+		transform: Callable[[torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor]] | None = None,
+	) -> None:
+		self.base_dataset = base_dataset
+		self.transform = transform
+
+	def __len__(self) -> int:
+		return len(self.base_dataset)
+
+	def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, Any]:
+		x, y, meta = self.base_dataset[idx]
+		if self.transform is not None:
+			x, y = self.transform(x, y)
+		return x, y, meta
+
+
+def build_train_transform(cfg: Dict[str, Any]) -> AOAAugmentation | None:
+	aug_cfg = cfg.get("augmentation", {})
+	if not bool(aug_cfg.get("runtime_enable", False)):
+		return None
+	gain_range = aug_cfg.get("gain_range", [1.0, 1.0])
+	if not isinstance(gain_range, (list, tuple)) or len(gain_range) != 2:
+		gain_range = [1.0, 1.0]
+	return AOAAugmentation(
+		prob_noise=float(aug_cfg.get("prob_noise", 0.0)),
+		noise_std=float(aug_cfg.get("noise_std", 0.0)),
+		prob_gain=float(aug_cfg.get("prob_gain", 0.0)),
+		gain_range=(float(gain_range[0]), float(gain_range[1])),
+		prob_bin_dropout=float(aug_cfg.get("prob_bin_dropout", 0.0)),
+		max_dropout_bins=int(aug_cfg.get("max_dropout_bins", 0)),
+		aoa_shift_bins=int(aug_cfg.get("aoa_shift_bins", 0)),
+	)
+
+
 def forward_pose_with_features(model: nn.Module, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
 	if not hasattr(model, "forward_features") or not hasattr(model, "forward_head"):
 		raise AttributeError("Model must implement forward_features() and forward_head() for anti-collapse training.")
@@ -243,9 +319,11 @@ def build_subset_loader(
         num_workers: int,
         pin_memory: bool,
         shuffle: bool,
+        transform: Callable[[torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor]] | None = None,
 ) -> DataLoader:
 	subset = Subset(ds, indices)
-	return DataLoader(subset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=pin_memory)
+	dataset: Dataset = TransformingDataset(subset, transform) if transform is not None else subset
+	return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=pin_memory)
 
 
 def build_dataloaders(
@@ -268,6 +346,7 @@ def build_dataloaders(
 	batch_size = int(dataset_cfg.get("batch_size", 32))
 	num_workers = int(dataset_cfg.get("num_workers", 0))
 	pin_memory = bool(dataset_cfg.get("pin_memory", False)) and device.type == "cuda"
+	train_transform = build_train_transform(cfg)
 	
 	train_envs = dataset_cfg.get("train_envs", [])
 	val_envs = dataset_cfg.get("val_envs", ["env3"])
@@ -282,7 +361,7 @@ def build_dataloaders(
 		raise RuntimeError("Training split is empty")
 
 	train_envs_seen = sorted(list(set(sample_to_env(ds.index[idx][1]) for idx in train_indices)))
-	train_loader = build_subset_loader(ds, train_indices, batch_size, num_workers, pin_memory, True)
+	train_loader = build_subset_loader(ds, train_indices, batch_size, num_workers, pin_memory, True, train_transform)
 	val_loader = build_subset_loader(ds, val_indices, batch_size, num_workers, pin_memory, False)
 	test_loader = build_subset_loader(ds, test_indices, batch_size, num_workers, pin_memory, False)
 	
@@ -294,6 +373,7 @@ def build_dataloaders(
 		"batch_size": batch_size,
 		"window_size": window_size,
 		"train_envs": train_envs_seen,
+		"train_augmentation": train_transform is not None,
 	}
 	return train_loader, val_loader, test_loader, stats
 
@@ -320,6 +400,45 @@ def build_model(cfg: Dict[str, Any], device: torch.device, window_size: int | No
 	else:
 		raise ValueError(f"Unsupported model name: {model_name}")
 	return model.to(device)
+
+
+def resolve_epoch_lr(train_cfg: Dict[str, Any], epoch_idx: int) -> float:
+	base_lr = float(train_cfg.get("lr", 3e-4))
+	scheduler_cfg = train_cfg.get("lr_scheduler", {})
+	if not bool(scheduler_cfg.get("enable", False)):
+		return base_lr
+
+	total_epochs = max(1, int(train_cfg.get("epochs", 1)))
+	warmup_epochs = max(0, int(scheduler_cfg.get("warmup_epochs", 0)))
+	min_lr_ratio = float(scheduler_cfg.get("min_lr_ratio", 0.1))
+	name = str(scheduler_cfg.get("name", "cosine")).strip().lower()
+
+	if warmup_epochs > 0 and epoch_idx < warmup_epochs:
+		return base_lr * float(epoch_idx + 1) / float(warmup_epochs)
+
+	if name == "cosine":
+		remaining_epochs = max(1, total_epochs - warmup_epochs - 1)
+		progress = float(max(0, epoch_idx - warmup_epochs)) / float(remaining_epochs)
+		progress = min(max(progress, 0.0), 1.0)
+		scale = min_lr_ratio + (1.0 - min_lr_ratio) * 0.5 * (1.0 + math.cos(math.pi * progress))
+		return base_lr * scale
+
+	return base_lr
+
+
+def set_optimizer_lr(optimizer: torch.optim.Optimizer, lr: float) -> None:
+	for param_group in optimizer.param_groups:
+		param_group["lr"] = float(lr)
+
+
+def resolve_early_stop_config(train_cfg: Dict[str, Any]) -> dict[str, Any]:
+	early_cfg = train_cfg.get("early_stop", {})
+	return {
+		"enable": bool(early_cfg.get("enable", False)),
+		"patience": max(1, int(early_cfg.get("patience", 5))),
+		"min_epochs": max(1, int(early_cfg.get("min_epochs", 1))),
+		"min_delta": float(early_cfg.get("min_delta", 0.0)),
+	}
 
 
 def save_checkpoint(
@@ -578,6 +697,31 @@ def assess_fit(history_rows: list[dict[str, Any]], final_test_nmpjpe: float) -> 
 	return "usable", f"Best Val: {best_val:.4f}. Final Test: {final_test_nmpjpe:.4f}."
 
 
+def summarize_overfit_history(history_rows: list[dict[str, Any]]) -> dict[str, float | int | None]:
+	if not history_rows:
+		return {
+			"best_val_epoch": None,
+			"best_val_nmpjpe": None,
+			"first_degradation_epoch": None,
+			"final_val_gap": 0.0,
+			"epochs_since_best": 0,
+		}
+	best_row = min(history_rows, key=lambda row: float(row["val_nmpjpe"]))
+	final_row = history_rows[-1]
+	first_degradation_epoch = None
+	for row in history_rows:
+		if float(row.get("val_gap_from_best", 0.0)) > 0.0:
+			first_degradation_epoch = int(row["epoch"])
+			break
+	return {
+		"best_val_epoch": int(best_row["epoch"]),
+		"best_val_nmpjpe": float(best_row["val_nmpjpe"]),
+		"first_degradation_epoch": first_degradation_epoch,
+		"final_val_gap": max(0.0, float(final_row["val_nmpjpe"]) - float(best_row["val_nmpjpe"])),
+		"epochs_since_best": int(final_row["epoch"]) - int(best_row["epoch"]),
+	}
+
+
 def main() -> None:
 	parser = argparse.ArgumentParser(description="Cleaned Training loop for AoA pose models")
 	parser.add_argument("--config", type=str, default="configs/default.yaml", help="Path to default.yaml")
@@ -637,6 +781,7 @@ def main() -> None:
 		cfg=cfg, device=device, aoa_root=aoa_root, labels_root=labels_root, window_size=window_size
 	)
 	logger.log(f"[data] train={split_stats['train_size']} val={split_stats['val_size']} test={split_stats['test_size']}", always=True)
+	logger.log(f"[aug] train_runtime_enable={split_stats['train_augmentation']}", always=True)
 
 	# --- Env mapping ---
 	domain_cfg = cfg.get("domain_adaptation", {})
@@ -679,6 +824,19 @@ def main() -> None:
 	else:
 		optimizer = torch.optim.Adam(trainable_params, lr=lr, weight_decay=weight_decay)
 
+	scheduler_cfg = train_cfg.get("lr_scheduler", {})
+	logger.log(
+		f"[sched] enable={bool(scheduler_cfg.get('enable', False))} "
+		f"name={scheduler_cfg.get('name', 'cosine')} warmup_epochs={int(scheduler_cfg.get('warmup_epochs', 0))}",
+		always=True,
+	)
+	early_stop_cfg = resolve_early_stop_config(train_cfg)
+	logger.log(
+		f"[early-stop] enable={early_stop_cfg['enable']} patience={early_stop_cfg['patience']} "
+		f"min_epochs={early_stop_cfg['min_epochs']} min_delta={early_stop_cfg['min_delta']:.6f}",
+		always=True,
+	)
+
 	checkpoint_cfg = cfg.get("checkpoint", {})
 	ckpt_path = resolve_path(checkpoint_cfg.get("save_path", "checkpoints/run_ckpt.pth"), PROJECT_ROOT)
 	last_ckpt_path = ckpt_path.with_name(f"{ckpt_path.stem}_last{ckpt_path.suffix}")
@@ -692,10 +850,16 @@ def main() -> None:
 	best_selection_score = float("-inf")
 	best_val = float("inf")
 	best_epoch = start_epoch
+	best_val_epoch = 0
+	first_degradation_epoch: int | None = None
 	history_rows: list[dict[str, Any]] = []
+	stopped_early = False
 
 	for epoch in range(start_epoch, epochs):
 		ep = epoch + 1
+		current_lr = resolve_epoch_lr(train_cfg, epoch)
+		set_optimizer_lr(optimizer, current_lr)
+		logger.log(f"[lr] epoch={ep}/{epochs} lr={current_lr:.6e}", always=True)
 		
 		train_loss, train_stats = train_one_epoch(
 			model, action_head, train_loader, device, optimizer, criterion,
@@ -706,9 +870,18 @@ def main() -> None:
 			model, action_head, val_loader, device, criterion, lambda_action_cls, use_dann, env_to_id, max_batches=max_val_batches
 		)
 		selection_score, selection_mode = compute_checkpoint_selection_score(val_nm, val_parts['std_ratio'], checkpoint_cfg)
+		prev_best_val = best_val
+		val_gap_from_best = max(0.0, val_nm - prev_best_val) if math.isfinite(prev_best_val) else 0.0
+		if first_degradation_epoch is None and math.isfinite(prev_best_val) and val_nm > (prev_best_val + early_stop_cfg["min_delta"]):
+			first_degradation_epoch = ep
+		if val_nm < (best_val - early_stop_cfg["min_delta"]):
+			best_val = val_nm
+			best_val_epoch = ep
+		epochs_since_best = max(0, ep - best_val_epoch)
 
 		history_rows.append({
 			"epoch": ep,
+			"lr": current_lr,
 			"train_loss": train_loss,
 			"train_pose": train_stats["pose_loss"],
 			"train_std_ratio": train_stats["std_ratio"],
@@ -723,7 +896,11 @@ def main() -> None:
 			"val_domain_loss": val_parts["domain_loss"],
 			"val_domain_acc": val_parts["domain_acc"],
 			"selection_mode": selection_mode,
-			"selection_score": selection_score
+			"selection_score": selection_score,
+			"best_val_nmpjpe_so_far": best_val,
+			"best_val_epoch_so_far": best_val_epoch,
+			"epochs_since_best": epochs_since_best,
+			"val_gap_from_best": val_gap_from_best,
 		})
 		save_history_csv(history_path, history_rows)
 
@@ -731,7 +908,7 @@ def main() -> None:
 			f"[summary] Epoch {ep}/{epochs} | "
 			f"Train Loss: {train_loss:.4f} (Pose: {train_stats['pose_loss']:.4f}, StdRatio: {train_stats['std_ratio']:.3f}, Acc: {train_stats['action_acc']:.2%}, D_Acc: {train_stats.get('domain_acc', 0.0):.2%}) | "
 			f"Val   Loss: {val_loss:.4f} (nMPJPE: {val_nm:.4f}, StdRatio: {val_parts['std_ratio']:.3f}, Acc: {val_parts['action_acc']:.2%}, D_Acc: {val_parts.get('domain_acc', 0.0):.2%}) | "
-			f"Score: {selection_score:.4f}",
+			f"Score: {selection_score:.4f} | BestVal: {best_val:.4f}@{best_val_epoch} | Gap: {val_gap_from_best:.4f}",
 			always=True
 		)
 
@@ -740,10 +917,18 @@ def main() -> None:
 		
 		if selection_score > best_selection_score:
 			best_selection_score = selection_score
-			best_val = val_nm
 			best_epoch = ep
 			save_checkpoint(ckpt_path, model, optimizer, ep, cfg, {"action_head": action_head})
-			logger.log(f"[ckpt] New best model saved (Score: {best_selection_score:.4f}, nMPJPE: {best_val:.4f})", always=True)
+			logger.log(f"[ckpt] New best model saved (Score: {best_selection_score:.4f}, nMPJPE: {val_nm:.4f})", always=True)
+
+		if early_stop_cfg["enable"] and ep >= early_stop_cfg["min_epochs"] and epochs_since_best >= early_stop_cfg["patience"]:
+			logger.log(
+				f"[early-stop] Triggered at epoch {ep}. best_val_epoch={best_val_epoch} "
+				f"best_val={best_val:.4f} patience={early_stop_cfg['patience']}",
+				always=True,
+			)
+			stopped_early = True
+			break
 
 	load_checkpoint(ckpt_path, model, extra_modules={"action_head": action_head})
 	train_loss, train_nm, train_parts = evaluate(
@@ -755,6 +940,14 @@ def main() -> None:
 	
 	logger.log(f"[train eval] nMPJPE={train_nm:.4f}", always=True)
 	logger.log(f"[test eval] nMPJPE={test_nm:.4f} (Acc: {test_parts['action_acc']:.2%})", always=True)
+	overfit_summary = summarize_overfit_history(history_rows)
+	logger.log(
+		f"[overfit] best_val_epoch={overfit_summary['best_val_epoch']} "
+		f"first_degradation_epoch={overfit_summary['first_degradation_epoch']} "
+		f"final_val_gap={float(overfit_summary['final_val_gap']):.4f} "
+		f"epochs_since_best={overfit_summary['epochs_since_best']} stopped_early={stopped_early}",
+		always=True,
+	)
 	
 	assessment, reason = assess_fit(history_rows, test_nm)
 	logger.log(f"[assessment] {assessment}: {reason}", always=True)
