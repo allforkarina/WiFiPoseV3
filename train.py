@@ -851,6 +851,8 @@ def main() -> None:
 	best_val = float("inf")
 	best_epoch = start_epoch
 	best_val_epoch = 0
+	patience_best_val = float("inf")
+	patience_best_epoch = 0
 	first_degradation_epoch: int | None = None
 	history_rows: list[dict[str, Any]] = []
 	stopped_early = False
@@ -871,13 +873,20 @@ def main() -> None:
 		)
 		selection_score, selection_mode = compute_checkpoint_selection_score(val_nm, val_parts['std_ratio'], checkpoint_cfg)
 		prev_best_val = best_val
-		val_gap_from_best = max(0.0, val_nm - prev_best_val) if math.isfinite(prev_best_val) else 0.0
 		if first_degradation_epoch is None and math.isfinite(prev_best_val) and val_nm > (prev_best_val + early_stop_cfg["min_delta"]):
 			first_degradation_epoch = ep
-		if val_nm < (best_val - early_stop_cfg["min_delta"]):
+		improved_checkpoint = selection_score > best_selection_score
+		if improved_checkpoint:
+			best_selection_score = selection_score
+			best_epoch = ep
 			best_val = val_nm
 			best_val_epoch = ep
+		if val_nm < (patience_best_val - early_stop_cfg["min_delta"]):
+			patience_best_val = val_nm
+			patience_best_epoch = ep
+		val_gap_from_best = max(0.0, val_nm - best_val) if math.isfinite(best_val) else 0.0
 		epochs_since_best = max(0, ep - best_val_epoch)
+		epochs_since_patience_best = max(0, ep - patience_best_epoch)
 
 		history_rows.append({
 			"epoch": ep,
@@ -915,16 +924,15 @@ def main() -> None:
 		if ep > 0:
 			save_checkpoint(last_ckpt_path, model, optimizer, ep, cfg, {"action_head": action_head})
 		
-		if selection_score > best_selection_score:
-			best_selection_score = selection_score
-			best_epoch = ep
+		if improved_checkpoint:
 			save_checkpoint(ckpt_path, model, optimizer, ep, cfg, {"action_head": action_head})
 			logger.log(f"[ckpt] New best model saved (Score: {best_selection_score:.4f}, nMPJPE: {val_nm:.4f})", always=True)
 
-		if early_stop_cfg["enable"] and ep >= early_stop_cfg["min_epochs"] and epochs_since_best >= early_stop_cfg["patience"]:
+		if early_stop_cfg["enable"] and ep >= early_stop_cfg["min_epochs"] and epochs_since_patience_best >= early_stop_cfg["patience"]:
 			logger.log(
-				f"[early-stop] Triggered at epoch {ep}. best_val_epoch={best_val_epoch} "
-				f"best_val={best_val:.4f} patience={early_stop_cfg['patience']}",
+				f"[early-stop] Triggered at epoch {ep}. patience_best_epoch={patience_best_epoch} "
+				f"patience_best_val={patience_best_val:.4f} checkpoint_best_epoch={best_val_epoch} "
+				f"checkpoint_best_val={best_val:.4f} patience={early_stop_cfg['patience']}",
 				always=True,
 			)
 			stopped_early = True

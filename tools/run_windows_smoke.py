@@ -13,6 +13,10 @@ TRACK_VARIANT_TO_CONFIG = {
     ("non_dann", "short"): "configs/windows_smoke_short.yaml",
     ("non_dann", "short_reg"): "configs/windows_smoke_short_reg.yaml",
     ("non_dann", "short_reg_aug"): "configs/windows_smoke_short_reg_aug.yaml",
+    ("non_dann", "short_aug"): "configs/windows_smoke_short_aug.yaml",
+    ("non_dann", "short_aug_mid"): "configs/windows_smoke_short_aug_mid.yaml",
+    ("non_dann", "short_aug_strong"): "configs/windows_smoke_short_aug_strong.yaml",
+    ("non_dann", "short_reg_aug_repro"): "configs/windows_smoke_short_reg_aug_repro.yaml",
     ("dann", "baseline"): "configs/windows_smoke_dann.yaml",
 }
 

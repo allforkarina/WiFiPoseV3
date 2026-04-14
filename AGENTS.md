@@ -11,11 +11,19 @@ Run commands from the repository root.
 - `python tools/run_windows_smoke.py --track non_dann --variant short` runs the short-run early-overfit smoke path.
 - `python tools/run_windows_smoke.py --track non_dann --variant short_reg` runs the stronger-regularization smoke path.
 - `python tools/run_windows_smoke.py --track non_dann --variant short_reg_aug` runs the stronger-regularization plus augmentation smoke path.
+- `python tools/run_windows_smoke.py --track non_dann --variant short_aug` runs the light-regularization plus augmentation smoke path.
+- `python tools/run_windows_smoke.py --track non_dann --variant short_aug_mid` runs the medium-strength augmentation smoke path.
+- `python tools/run_windows_smoke.py --track non_dann --variant short_aug_strong` runs the strong augmentation smoke path with light regularization.
+- `python tools/run_windows_smoke.py --track non_dann --variant short_reg_aug_repro` reruns the current best regularization-plus-augmentation smoke path.
 - `python tools/run_windows_smoke.py --track dann` runs the fixed local DANN smoke path.
 - `python tools/run_linux_formal.py --track non_dann --variant accuracy` runs the formal non-DANN accuracy-first track.
 - `python tools/run_linux_formal.py --track non_dann --variant short` runs the short-run formal non-DANN track.
 - `python tools/run_linux_formal.py --track non_dann --variant short_reg` runs the stronger-regularization formal non-DANN track.
 - `python tools/run_linux_formal.py --track non_dann --variant short_reg_aug` runs the stronger-regularization plus augmentation formal non-DANN track.
+- `python tools/run_linux_formal.py --track non_dann --variant short_aug` runs the light-regularization plus augmentation formal non-DANN track.
+- `python tools/run_linux_formal.py --track non_dann --variant short_aug_mid` runs the medium-strength augmentation formal non-DANN track.
+- `python tools/run_linux_formal.py --track non_dann --variant short_aug_strong` runs the strong augmentation formal non-DANN track with light regularization.
+- `python tools/run_linux_formal.py --track non_dann --variant short_reg_aug_repro` reruns the current best regularization-plus-augmentation formal non-DANN track.
 - `python tools/run_linux_formal.py --track non_dann --variant balanced` runs the formal non-DANN balanced-selection track.
 - `python tools/run_linux_formal.py --track dann --variant accuracy` runs the formal DANN accuracy-first track.
 - `python tools/run_linux_formal.py --track dann --variant balanced` runs the formal DANN balanced-selection track.
@@ -36,10 +44,12 @@ Use short imperative commit messages scoped to one change, such as `Add smoke co
 `configs/default.yaml` and `configs/linux.yaml` remain backward-compatible entry configs. Preferred current configs are:
 
 - `configs/windows_smoke.yaml` for local smoke-only validation
-- `configs/windows_smoke_short.yaml`, `configs/windows_smoke_short_reg.yaml`, and `configs/windows_smoke_short_reg_aug.yaml` for the early-overfit smoke matrix
+- `configs/windows_smoke_short.yaml`, `configs/windows_smoke_short_reg.yaml`, and `configs/windows_smoke_short_reg_aug.yaml` for the first early-overfit smoke matrix
+- `configs/windows_smoke_short_aug.yaml`, `configs/windows_smoke_short_aug_mid.yaml`, `configs/windows_smoke_short_aug_strong.yaml`, and `configs/windows_smoke_short_reg_aug_repro.yaml` for the augmentation-first smoke matrix
 - `configs/windows_smoke_dann.yaml` for local DANN smoke validation
 - `configs/linux_non_dann_accuracy.yaml`, `configs/linux_non_dann_balanced.yaml`, and `configs/linux_non_dann.yaml` for the non-DANN matrix
-- `configs/linux_non_dann_short_accuracy.yaml`, `configs/linux_non_dann_short_reg_accuracy.yaml`, and `configs/linux_non_dann_short_reg_aug_accuracy.yaml` for the non-DANN early-overfit mitigation matrix
+- `configs/linux_non_dann_short_accuracy.yaml`, `configs/linux_non_dann_short_reg_accuracy.yaml`, and `configs/linux_non_dann_short_reg_aug_accuracy.yaml` for the first non-DANN early-overfit mitigation matrix
+- `configs/linux_non_dann_short_aug_accuracy.yaml`, `configs/linux_non_dann_short_aug_mid_accuracy.yaml`, `configs/linux_non_dann_short_aug_strong_accuracy.yaml`, and `configs/linux_non_dann_short_reg_aug_repro_accuracy.yaml` for the augmentation-first non-DANN matrix
 - `configs/linux_dann_accuracy.yaml`, `configs/linux_dann_balanced.yaml`, and `configs/linux_dann.yaml` for the DANN matrix
 
 Keep `domain_adaptation.use_dann` disabled unless the active experiment is explicitly the DANN track.
@@ -64,10 +74,13 @@ Keep `domain_adaptation.use_dann` disabled unless the active experiment is expli
 - **Completed**: `accuracy` is the only checkpoint-selection rule that remains competitive on final test `nMPJPE`. `balanced` and `diversity` improve `std_ratio` but consistently worsen pose accuracy.
 - **Completed**: The matched `accuracy` comparison shows no meaningful DANN gain under the current setup. `linux_non_dann_accuracy_resnet1d_20260412-193627.log` remains the official best run with final test `nMPJPE=0.1900`, while `linux_dann_accuracy_resnet1d_20260413-031611.log` finishes at `0.1902`.
 - **Completed**: Across the reviewed matrices, the best validation `nMPJPE` appears at epoch 1, which indicates the current training recipe overfits cross-environment generalization almost immediately.
-- **Pending / Next Stage**: Lock `non-DANN + accuracy` as the official baseline and use it as the default comparison target for future ablations.
+- **Completed**: `non-DANN + accuracy` is locked as the official baseline and remains the default comparison target for future ablations.
 - **Completed**: The training loop now supports opt-in epoch-level LR scheduling, opt-in early stopping, runtime train-only AoA augmentation, and explicit overfit diagnostics (`lr`, `best_val_epoch`, `epochs_since_best`, `val_gap_from_best`, final `[overfit]` summary).
-- **Pending / Next Stage**: Run the first four-run early-overfit mitigation matrix on Linux: `baseline`, `short`, `short_reg`, `short_reg_aug`.
-- **Pending / Next Stage**: Treat `short` as the schedule-only ablation, `short_reg` as the regularization ablation, and `short_reg_aug` as the strongest low-risk training-side ablation against the `0.1900` official baseline.
+- **Completed**: The first four-run non-DANN early-overfit mitigation matrix (`baseline`, `short`, `short_reg`, `short_reg_aug`) has been reviewed. `short_reg_aug` nearly matches the official baseline at `test nMPJPE=0.1901` and is the healthiest overfit-mitigation candidate so far.
+- **Completed**: The first mitigation review shows that stronger regularization alone does not help. The useful signal comes from the short-schedule plus runtime-augmentation combination.
+- **Completed**: Best-checkpoint logging and best-so-far diagnostics now use the same checkpoint-improvement rule, while early stopping keeps its own `min_delta`-based patience anchor.
+- **Pending / Next Stage**: Run the augmentation-first four-run Linux matrix: `short_aug`, `short_aug_mid`, `short_aug_strong`, `short_reg_aug_repro`.
+- **Pending / Next Stage**: Use the augmentation-first matrix to decide whether runtime augmentation alone can beat `0.1900`, or whether the stronger `short_reg_aug` recipe needs to remain the leading candidate.
 - **Pending / Diagnostic**: Verify why `linux_dann_diversity_resnet1d_20260413-083219.log` currently ends at epoch 64 without final `train/test eval` lines before treating that run as a formal completed result.
 
 ## Testing and Validation Plan
@@ -77,13 +90,14 @@ Keep `domain_adaptation.use_dann` disabled unless the active experiment is expli
 - `balanced` and `diversity` may still be run as diagnostics, but they must not be treated as primary selection rules unless they also improve final `nMPJPE`.
 - The primary acceptance metric is always `val/test nMPJPE`.
 - `std_ratio`, `action_aux` validation accuracy, and domain-classifier metrics are secondary diagnostics and must not override worse pose accuracy.
-- For the current early-overfit stage, every formal log should also report `best_val_epoch`, `first_degradation_epoch`, `final_val_gap`, and whether early stopping triggered.
+- For the current overfit-mitigation stage, every formal log should also report `best_val_epoch`, `first_degradation_epoch`, `final_val_gap`, and whether early stopping triggered, and these fields must stay consistent with any saved best checkpoint.
+- The current augmentation-first acceptance target is to beat the official baseline `0.1900`, or at minimum beat `short_reg_aug` (`test nMPJPE=0.1901`) while keeping `best_val_epoch >= 2` and a smaller `final_val_gap`.
 - Any future DANN formal run must be considered incomplete if the log does not include final `train eval`, `test eval`, and assessment lines.
 
 ## Current Workflow
 1. Update code or configs on Windows.
-2. Run `python tools/run_windows_smoke.py --track <non_dann|dann> [--variant <baseline|short|short_reg|short_reg_aug>]` inside `WiFiPose`.
+2. Run `python tools/run_windows_smoke.py --track <non_dann|dann> [--variant <baseline|short|short_reg|short_reg_aug|short_aug|short_aug_mid|short_aug_strong|short_reg_aug_repro>]` inside `WiFiPose`.
 3. Update `AGENTS.md`, commit, and push.
-4. Pull on Linux and run the chosen formal track, using `baseline`, `short`, `short_reg`, and `short_reg_aug` for the current non-DANN overfit-mitigation matrix and reserving `balanced` or `diversity` for diagnostics only.
+4. Pull on Linux and run the chosen formal track. The current non-DANN priority matrix is `short_aug`, `short_aug_mid`, `short_aug_strong`, and `short_reg_aug_repro`; `balanced` and `diversity` remain diagnostics only.
 5. Push formal `logs/` back to GitHub.
-6. Pull the new logs on Windows, compare them against the `0.1900` official baseline, and update the next optimization target list.
+6. Pull the new logs on Windows, compare them against the `0.1900` official baseline and the `0.1901` `short_reg_aug` candidate, and update the next optimization target list.
