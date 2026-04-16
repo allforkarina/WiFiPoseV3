@@ -10,6 +10,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TRACK_VARIANT_TO_CONFIG = {
     ("non_dann", "baseline"): "configs/windows_smoke.yaml",
+    ("non_dann", "mixed"): "configs/windows_smoke_mixed.yaml",
     ("non_dann", "short"): "configs/windows_smoke_short.yaml",
     ("non_dann", "short_reg"): "configs/windows_smoke_short_reg.yaml",
     ("non_dann", "short_reg_aug"): "configs/windows_smoke_short_reg_aug.yaml",

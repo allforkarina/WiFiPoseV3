@@ -9,6 +9,8 @@ Run commands from the repository root.
 - `python train.py --config configs/default.yaml` runs the default Windows-facing training config.
 - `python tools/run_windows_smoke.py --track non_dann` runs the fixed local non-DANN smoke path.
 - `python tools/run_windows_smoke.py --track non_dann --variant short` runs the short-run early-overfit smoke path.
+- `python tools/run_windows_smoke.py --track non_dann --variant mixed` runs the mixed-environment sequence-split smoke path for in-distribution overfit diagnosis.
+- `python train.py --config configs/windows_local_mixed_accuracy.yaml` runs the local Windows mixed-environment full-training diagnostic path when Linux is unavailable.
 - `python tools/run_windows_smoke.py --track non_dann --variant short_reg` runs the stronger-regularization smoke path.
 - `python tools/run_windows_smoke.py --track non_dann --variant short_reg_aug` runs the stronger-regularization plus augmentation smoke path.
 - `python tools/run_windows_smoke.py --track non_dann --variant short_aug` runs the light-regularization plus augmentation smoke path.
@@ -17,6 +19,7 @@ Run commands from the repository root.
 - `python tools/run_windows_smoke.py --track non_dann --variant short_reg_aug_repro` reruns the current best regularization-plus-augmentation smoke path.
 - `python tools/run_windows_smoke.py --track dann` runs the fixed local DANN smoke path.
 - `python tools/run_linux_formal.py --track non_dann --variant accuracy` runs the formal non-DANN accuracy-first track.
+- `python tools/run_linux_formal.py --track non_dann --variant mixed` runs the formal mixed-environment sequence-split non-DANN track for in-distribution overfit diagnosis.
 - `python tools/run_linux_formal.py --track non_dann --variant short` runs the short-run formal non-DANN track.
 - `python tools/run_linux_formal.py --track non_dann --variant short_reg` runs the stronger-regularization formal non-DANN track.
 - `python tools/run_linux_formal.py --track non_dann --variant short_reg_aug` runs the stronger-regularization plus augmentation formal non-DANN track.
@@ -44,10 +47,13 @@ Use short imperative commit messages scoped to one change, such as `Add smoke co
 `configs/default.yaml` and `configs/linux.yaml` remain backward-compatible entry configs. Preferred current configs are:
 
 - `configs/windows_smoke.yaml` for local smoke-only validation
+- `configs/windows_smoke_mixed.yaml` for local mixed-environment sequence-split smoke validation
+- `configs/windows_local_mixed_accuracy.yaml` for local Windows mixed-environment full-training diagnosis
 - `configs/windows_smoke_short.yaml`, `configs/windows_smoke_short_reg.yaml`, and `configs/windows_smoke_short_reg_aug.yaml` for the first early-overfit smoke matrix
 - `configs/windows_smoke_short_aug.yaml`, `configs/windows_smoke_short_aug_mid.yaml`, `configs/windows_smoke_short_aug_strong.yaml`, and `configs/windows_smoke_short_reg_aug_repro.yaml` for the augmentation-first smoke matrix
 - `configs/windows_smoke_dann.yaml` for local DANN smoke validation
 - `configs/linux_non_dann_accuracy.yaml`, `configs/linux_non_dann_balanced.yaml`, and `configs/linux_non_dann.yaml` for the non-DANN matrix
+- `configs/linux_non_dann_mixed_accuracy.yaml` for the mixed-environment sequence-split non-DANN diagnostic track
 - `configs/linux_non_dann_short_accuracy.yaml`, `configs/linux_non_dann_short_reg_accuracy.yaml`, and `configs/linux_non_dann_short_reg_aug_accuracy.yaml` for the first non-DANN early-overfit mitigation matrix
 - `configs/linux_non_dann_short_aug_accuracy.yaml`, `configs/linux_non_dann_short_aug_mid_accuracy.yaml`, `configs/linux_non_dann_short_aug_strong_accuracy.yaml`, and `configs/linux_non_dann_short_reg_aug_repro_accuracy.yaml` for the augmentation-first non-DANN matrix
 - `configs/linux_dann_accuracy.yaml`, `configs/linux_dann_balanced.yaml`, and `configs/linux_dann.yaml` for the DANN matrix
@@ -79,13 +85,17 @@ Keep `domain_adaptation.use_dann` disabled unless the active experiment is expli
 - **Completed**: The first four-run non-DANN early-overfit mitigation matrix (`baseline`, `short`, `short_reg`, `short_reg_aug`) has been reviewed. `short_reg_aug` nearly matches the official baseline at `test nMPJPE=0.1901` and is the healthiest overfit-mitigation candidate so far.
 - **Completed**: The first mitigation review shows that stronger regularization alone does not help. The useful signal comes from the short-schedule plus runtime-augmentation combination.
 - **Completed**: Best-checkpoint logging and best-so-far diagnostics now use the same checkpoint-improvement rule, while early stopping keeps its own `min_delta`-based patience anchor.
+- **Completed**: A mixed-environment sequence-level split protocol is now available for in-distribution overfit diagnosis. It keeps each `(action, sample)` sequence intact and splits each `(action, env)` bucket with a fixed `7:2:1` train/val/test ratio.
+- **Completed**: A local Windows full-training mixed split config is available for temporary server-maintenance periods. It uses `cuda:0`, `batch_size=32`, and early stopping for in-distribution overfit diagnosis only.
 - **Pending / Next Stage**: Run the augmentation-first four-run Linux matrix: `short_aug`, `short_aug_mid`, `short_aug_strong`, `short_reg_aug_repro`.
 - **Pending / Next Stage**: Use the augmentation-first matrix to decide whether runtime augmentation alone can beat `0.1900`, or whether the stronger `short_reg_aug` recipe needs to remain the leading candidate.
 - **Pending / Diagnostic**: Verify why `linux_dann_diversity_resnet1d_20260413-083219.log` currently ends at epoch 64 without final `train/test eval` lines before treating that run as a formal completed result.
 
 ## Testing and Validation Plan
 - Windows validation must use the `windows_smoke*.yaml` configs and should only touch temporary outputs under `tmp/windows_smoke/`.
+- Temporary local full-training diagnostics on Windows must use `configs/windows_local_mixed_accuracy.yaml` and keep artifacts under `tmp/windows_local_train/`.
 - Every Linux formal run must produce tracked `logs/` and be compared with the current official baseline `linux_non_dann_accuracy_resnet1d_20260412-193627.log` (`test nMPJPE=0.1900`).
+- The mixed-environment sequence-split track is diagnostic only. It answers in-distribution overfit questions and must not replace the official cross-environment LOEO baseline.
 - The default formal checkpoint-selection rule for official comparisons is now `accuracy`.
 - `balanced` and `diversity` may still be run as diagnostics, but they must not be treated as primary selection rules unless they also improve final `nMPJPE`.
 - The primary acceptance metric is always `val/test nMPJPE`.
@@ -96,8 +106,8 @@ Keep `domain_adaptation.use_dann` disabled unless the active experiment is expli
 
 ## Current Workflow
 1. Update code or configs on Windows.
-2. Run `python tools/run_windows_smoke.py --track <non_dann|dann> [--variant <baseline|short|short_reg|short_reg_aug|short_aug|short_aug_mid|short_aug_strong|short_reg_aug_repro>]` inside `WiFiPose`.
+2. Run `python tools/run_windows_smoke.py --track <non_dann|dann> [--variant <baseline|mixed|short|short_reg|short_reg_aug|short_aug|short_aug_mid|short_aug_strong|short_reg_aug_repro>]` inside `WiFiPose`.
 3. Update `AGENTS.md`, commit, and push.
-4. Pull on Linux and run the chosen formal track. The current non-DANN priority matrix is `short_aug`, `short_aug_mid`, `short_aug_strong`, and `short_reg_aug_repro`; `balanced` and `diversity` remain diagnostics only.
+4. Pull on Linux and run the chosen formal track. The current non-DANN priority matrix is `short_aug`, `short_aug_mid`, `short_aug_strong`, and `short_reg_aug_repro`; `balanced`, `diversity`, and `mixed` remain diagnostics only.
 5. Push formal `logs/` back to GitHub.
 6. Pull the new logs on Windows, compare them against the `0.1900` official baseline and the `0.1901` `short_reg_aug` candidate, and update the next optimization target list.

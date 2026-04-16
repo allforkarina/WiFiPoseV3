@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import random
 import time
 import sys
 import subprocess
@@ -312,6 +313,53 @@ def split_indices_by_envs(
         return train_indices, val_indices, test_indices
 
 
+def split_indices_by_action_env_sequence(
+	ds: AOASampleDataset,
+	train_ratio: int,
+	val_ratio: int,
+	test_ratio: int,
+	seed: int,
+) -> tuple[list[int], list[int], list[int]]:
+	sequence_to_indices: dict[tuple[str, str], list[int]] = {}
+	grouped_sequences: dict[tuple[str, str], list[tuple[str, str]]] = {}
+	ratio_sum = train_ratio + val_ratio + test_ratio
+	if ratio_sum <= 0:
+		raise ValueError("Sequence split ratios must sum to a positive value.")
+
+	for idx, (action, sample, _) in enumerate(ds.index):
+		seq_key = (action, sample)
+		if seq_key not in sequence_to_indices:
+			sequence_to_indices[seq_key] = []
+			group_key = (action, sample_to_env(sample))
+			grouped_sequences.setdefault(group_key, []).append(seq_key)
+		sequence_to_indices[seq_key].append(idx)
+
+	rng = random.Random(seed)
+	train_indices: list[int] = []
+	val_indices: list[int] = []
+	test_indices: list[int] = []
+
+	for group_key in sorted(grouped_sequences):
+		sequence_keys = sorted(grouped_sequences[group_key], key=lambda item: item[1])
+		rng.shuffle(sequence_keys)
+		total = len(sequence_keys)
+		train_end = (total * train_ratio) // ratio_sum
+		val_end = (total * (train_ratio + val_ratio)) // ratio_sum
+
+		for seq_key in sequence_keys[:train_end]:
+			train_indices.extend(sequence_to_indices[seq_key])
+		for seq_key in sequence_keys[train_end:val_end]:
+			val_indices.extend(sequence_to_indices[seq_key])
+		for seq_key in sequence_keys[val_end:]:
+			test_indices.extend(sequence_to_indices[seq_key])
+
+	return train_indices, val_indices, test_indices
+
+
+def count_unique_sequences(ds: AOASampleDataset, indices: list[int]) -> int:
+	return len({(ds.index[idx][0], ds.index[idx][1]) for idx in indices})
+
+
 def build_subset_loader(
         ds: AOASampleDataset,
         indices: list[int],
@@ -347,16 +395,32 @@ def build_dataloaders(
 	num_workers = int(dataset_cfg.get("num_workers", 0))
 	pin_memory = bool(dataset_cfg.get("pin_memory", False)) and device.type == "cuda"
 	train_transform = build_train_transform(cfg)
-	
-	train_envs = dataset_cfg.get("train_envs", [])
-	val_envs = dataset_cfg.get("val_envs", ["env3"])
-	test_envs = dataset_cfg.get("test_envs", ["env4"])
-	
-	if isinstance(train_envs, str): train_envs = [train_envs]
-	if isinstance(val_envs, str): val_envs = [val_envs]
-	if isinstance(test_envs, str): test_envs = [test_envs]
+	split_cfg = cfg.get("splits", {})
+	protocol = str(split_cfg.get("protocol", "LOEO")).strip().lower()
 
-	train_indices, val_indices, test_indices = split_indices_by_envs(ds, train_envs, val_envs, test_envs)
+	if protocol == "mixed_action_env_sequence":
+		raw_ratio = split_cfg.get("sequence_ratio", [7, 2, 1])
+		if not isinstance(raw_ratio, (list, tuple)) or len(raw_ratio) != 3:
+			raw_ratio = [7, 2, 1]
+		train_ratio, val_ratio, test_ratio = [max(0, int(value)) for value in raw_ratio]
+		split_seed = int(split_cfg.get("seed", cfg.get("train", {}).get("seed", 42)))
+		train_indices, val_indices, test_indices = split_indices_by_action_env_sequence(
+			ds,
+			train_ratio=train_ratio,
+			val_ratio=val_ratio,
+			test_ratio=test_ratio,
+			seed=split_seed,
+		)
+	else:
+		train_envs = dataset_cfg.get("train_envs", [])
+		val_envs = dataset_cfg.get("val_envs", ["env3"])
+		test_envs = dataset_cfg.get("test_envs", ["env4"])
+		
+		if isinstance(train_envs, str): train_envs = [train_envs]
+		if isinstance(val_envs, str): val_envs = [val_envs]
+		if isinstance(test_envs, str): test_envs = [test_envs]
+
+		train_indices, val_indices, test_indices = split_indices_by_envs(ds, train_envs, val_envs, test_envs)
 	if not train_indices:
 		raise RuntimeError("Training split is empty")
 
@@ -366,10 +430,14 @@ def build_dataloaders(
 	test_loader = build_subset_loader(ds, test_indices, batch_size, num_workers, pin_memory, False)
 	
 	stats = {
+		"split_protocol": protocol,
 		"dataset_size": len(ds),
 		"train_size": len(train_indices),
 		"val_size": len(val_indices),
 		"test_size": len(test_indices),
+		"train_sequences": count_unique_sequences(ds, train_indices),
+		"val_sequences": count_unique_sequences(ds, val_indices),
+		"test_sequences": count_unique_sequences(ds, test_indices),
 		"batch_size": batch_size,
 		"window_size": window_size,
 		"train_envs": train_envs_seen,
@@ -779,6 +847,12 @@ def main() -> None:
 
 	train_loader, val_loader, test_loader, split_stats = build_dataloaders(
 		cfg=cfg, device=device, aoa_root=aoa_root, labels_root=labels_root, window_size=window_size
+	)
+	logger.log(
+		f"[split] protocol={split_stats['split_protocol']} "
+		f"train_seq={split_stats['train_sequences']} val_seq={split_stats['val_sequences']} "
+		f"test_seq={split_stats['test_sequences']}",
+		always=True,
 	)
 	logger.log(f"[data] train={split_stats['train_size']} val={split_stats['val_size']} test={split_stats['test_size']}", always=True)
 	logger.log(f"[aug] train_runtime_enable={split_stats['train_augmentation']}", always=True)

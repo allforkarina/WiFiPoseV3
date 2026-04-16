@@ -1,0 +1,160 @@
+# Windows smoke configuration for mixed-environment sequence-level 7:2:1 splitting.
+preprocess_version: "v1.1"
+data_root: "data"
+raw_data_root: "D:\\Files\\WiFi_Pose\\WiFiPoseV3\\data\\dataset"
+aoa_cache_root: "D:\\Files\\WiFi_Pose\\WiFiPoseV3\\data\\AOA_data"
+labels_root: "D:\\Files\\WiFi_Pose\\WiFiPoseV3\\data\\dataset"
+splits_root: "splits"
+logs_root: "tmp/windows_smoke/logs"
+checkpoints_root: "tmp/windows_smoke/checkpoints"
+
+aoa:
+  bins: 181
+  use_tof: false
+
+h5:
+  frames_per_sample: 297
+  compression: "gzip"
+  compression_level: 4
+  chunk_frames: 32
+  write_atomic: true
+
+verify:
+  require_frame_count: 297
+  skip_bad_samples: true
+  bad_samples_log: "data/bad_samples.log"
+  compute_sha256: true
+
+dataset:
+  input_channels: 1
+  input_length: 181
+  window_size: 1
+  batch_size: 8
+  num_workers: 0
+  pin_memory: false
+  cache_in_memory: false
+
+augmentation:
+  enable: true
+  prob_noise: 0.5
+  noise_std: 0.02
+  prob_gain: 0.3
+  gain_range: [0.8, 1.2]
+  prob_bin_dropout: 0.2
+  max_dropout_bins: 5
+  aoa_shift_bins: 1
+
+model:
+  name: "resnet1d"
+  input_channels: 1
+  input_length: 181
+  hidden_dim: 256
+  dropout: 0.2
+  output_joints: 17
+  output_dim: 2
+
+train:
+  device: "cpu"
+  seed: 42
+  epochs: 1
+  optimizer: "AdamW"
+  lr: 3e-4
+  weight_decay: 1e-4
+  grad_clip: 1.0
+  lr_scheduler:
+    name: "cosine"
+    warmup_epochs: 1
+
+loss:
+  normalize_mode: "mean_rms"
+  lambda_pose: 1.0
+  lambda_dir: 1.0
+  lambda_angle: 0.5
+  lambda_len: 1.0
+  lambda_sym: 0.1
+  lambda_reg: 0.01
+  lambda_var: 0.0
+  lambda_batch_div: 0.0
+  batch_div_schedule:
+    enable: false
+    name: "rise_fall"
+    start: 0.3
+    peak: 0.6
+    end: 0.4
+    peak_epoch_ratio: 0.4
+  lambda_inter_div: 0.0
+  inter_div_schedule:
+    enable: true
+    name: "rise_fall"
+    start: 0.25
+    peak: 0.55
+    end: 0.35
+    peak_epoch_ratio: 0.45
+  lambda_intra_div: 0.0
+  intra_div_schedule:
+    enable: false
+    name: "fixed"
+    start: 0.0
+  preserve_ratio: 0.6
+  huber_delta: 1.0
+
+action_aux:
+  enable: true
+  num_actions: 27
+  lambda_cls: 0.2
+  dropout: 0.1
+
+domain_adaptation:
+  use_dann: false
+  use_mmd: false
+  lambda_domain: 0.0
+
+eval:
+  metrics:
+    - "N-MPJPE"
+    - "TorsoOrientationError"
+    - "BoneCosine"
+    - "JointAngleRMSE"
+    - "PCK"
+  pck_thresholds: [0.05, 0.1]
+
+checkpoint:
+  save_top_k: 1
+  monitor: "val/N-MPJPE"
+  mode: "min"
+  save_interval_epochs: 1
+  resume: false
+  resume_checkpoint: ""
+  save_path: "tmp/windows_smoke/checkpoints/windows_smoke_mixed_ckpt.pth"
+  selection:
+    mode: "accuracy"
+    pair_ratio_weight: 1.0
+    std_ratio_weight: 0.35
+    inter_pair_ratio_weight: 0.15
+    nmpjpe_penalty: 0.02
+
+logging:
+  use_wandb: false
+  wandb_project: "wifi_aoa_pose"
+  log_interval_steps: 1
+  run_name: "windows_smoke_mixed"
+
+splits:
+  protocol: "mixed_action_env_sequence"
+  sequence_ratio: [7, 2, 1]
+  seed: 42
+  splits_dir: "splits"
+  sample_env_rule:
+    group_size: 10
+    env_prefix: "env"
+
+misc:
+  verbose: true
+  deterministic: false
+
+debug:
+  max_train_batches: 1
+  max_val_batches: 1
+  max_train_eval_batches: 1
+  max_test_batches: 1
+  skip_artifact_prune: true
