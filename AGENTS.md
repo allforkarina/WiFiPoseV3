@@ -31,6 +31,7 @@ Run commands from the repository root.
 - `python tools/run_linux_formal.py --track dann --variant accuracy` runs the formal DANN accuracy-first track.
 - `python tools/run_linux_formal.py --track dann --variant balanced` runs the formal DANN balanced-selection track.
 - `python eval.py --config configs/linux_non_dann.yaml --checkpoint checkpoints/<run>.pth` evaluates a saved checkpoint.
+- `python tools/diagnose_aoa_env_diff.py --config configs/windows_smoke.yaml` diagnoses absolute-vs-differential AoA environment gaps and low-motion-frame ratios without training.
 - `python sanity_check/run_sanity_check.py --epochs 5 --device cpu` verifies the minimal forward/backward pipeline.
 - `python tools/prune_run_artifacts.py --keep 5` trims old tracked logs and checkpoints.
 
@@ -88,11 +89,13 @@ Keep `domain_adaptation.use_dann` disabled unless the active experiment is expli
 - **Completed**: A local Windows full-training mixed split config is available for temporary server-maintenance periods. It uses `cuda:0`, `batch_size=32`, and early stopping for in-distribution overfit diagnosis only.
 - **Pending / Next Stage**: Run the augmentation-first four-run Linux matrix: `short_aug`, `short_aug_mid`, `short_aug_strong`, `short_reg_aug_repro`.
 - **Pending / Next Stage**: Use the augmentation-first matrix to decide whether runtime augmentation alone can beat `0.1900`, or whether the stronger `short_reg_aug` recipe needs to remain the leading candidate.
+- **Pending / Diagnostic**: Use `tools/diagnose_aoa_env_diff.py` to quantify whether differential AoA already suppresses cross-environment gaps more than absolute AoA, and whether low-motion frames are common enough to justify curriculum learning.
 - **Pending / Diagnostic**: Verify why `linux_dann_diversity_resnet1d_20260413-083219.log` currently ends at epoch 64 without final `train/test eval` lines before treating that run as a formal completed result.
 
 ## Testing and Validation Plan
 - Windows validation must use the `windows_smoke*.yaml` configs and should only touch temporary outputs under `tmp/windows_smoke/`.
 - Temporary local full-training diagnostics on Windows must use `configs/windows_local_mixed_accuracy.yaml` and keep artifacts under `tmp/windows_local_train/`.
+- Windows-only AoA diagnosis runs must use `tools/diagnose_aoa_env_diff.py` and keep outputs under `tmp/diagnostics/aoa_env_diff/`.
 - Every Linux formal run must produce tracked `logs/` and be compared with the current official baseline `linux_non_dann_accuracy_resnet1d_20260412-193627.log` (`test nMPJPE=0.1900`).
 - The mixed-environment sequence-split track is diagnostic only. It answers in-distribution overfit questions and must not replace the official cross-environment LOEO baseline.
 - The default formal checkpoint-selection rule for official comparisons is now `accuracy`.
@@ -106,7 +109,8 @@ Keep `domain_adaptation.use_dann` disabled unless the active experiment is expli
 ## Current Workflow
 1. Update code or configs on Windows.
 2. Run `python tools/run_windows_smoke.py --track <non_dann|dann> [--variant <baseline|mixed|short|short_reg|short_reg_aug|short_aug|short_aug_mid|short_aug_strong|short_reg_aug_repro>]` inside `WiFiPose`.
-3. Update `AGENTS.md`, commit, and push.
-4. Pull on Linux and run the chosen formal track. The current non-DANN priority matrix is `short_aug`, `short_aug_mid`, `short_aug_strong`, and `short_reg_aug_repro`; `balanced`, `diversity`, and `mixed` remain diagnostics only.
-5. Push formal `logs/` back to GitHub.
-6. Pull the new logs on Windows, compare them against the `0.1900` official baseline and the `0.1901` `short_reg_aug` candidate, and update the next optimization target list.
+3. When feature-level diagnosis is needed, run `python tools/diagnose_aoa_env_diff.py --config configs/windows_smoke.yaml` inside `WiFiPose` and keep the outputs under `tmp/diagnostics/aoa_env_diff/`.
+4. Update `AGENTS.md`, commit, and push.
+5. Pull on Linux and run the chosen formal track. The current non-DANN priority matrix is `short_aug`, `short_aug_mid`, `short_aug_strong`, and `short_reg_aug_repro`; `balanced`, `diversity`, and `mixed` remain diagnostics only.
+6. Push formal `logs/` back to GitHub.
+7. Pull the new logs on Windows, compare them against the `0.1900` official baseline and the `0.1901` `short_reg_aug` candidate, and update the next optimization target list.
