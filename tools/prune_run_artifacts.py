@@ -86,7 +86,6 @@ def main() -> None:
 
     prune_train_logs(PROJECT_ROOT / "logs" / "train", keep)
     prune_subdirs(PROJECT_ROOT / "logs" / "eval", keep)
-    prune_subdirs(PROJECT_ROOT / "logs", keep, prefix="diagnose_pose_collapse")
     prune_checkpoint_groups(PROJECT_ROOT / "checkpoints", keep)
     print(f"[prune] keep={keep} completed")
 

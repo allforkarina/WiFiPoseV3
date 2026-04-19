@@ -44,19 +44,17 @@ This repository uses script-level validation instead of a formal `pytest` suite.
 Use short imperative commit messages scoped to one change, such as `Add smoke config and formal track split`. Every meaningful change must update this `AGENTS.md`, then be synced with `git add`, `git commit`, and `git push`. Include tracked `logs/` when the Linux server produces a formal result worth preserving.
 
 ## Configuration & Data Notes
-`configs/default.yaml` and `configs/linux.yaml` remain backward-compatible entry configs. Preferred current configs are:
+`configs/default.yaml` remains the backward-compatible entry config. Preferred current configs are:
 
 - `configs/windows_smoke.yaml` for local smoke-only validation
 - `configs/windows_smoke_mixed.yaml` for local mixed-environment sequence-split smoke validation
 - `configs/windows_local_mixed_accuracy.yaml` for local Windows mixed-environment full-training diagnosis
-- `configs/windows_smoke_short.yaml`, `configs/windows_smoke_short_reg.yaml`, and `configs/windows_smoke_short_reg_aug.yaml` for the first early-overfit smoke matrix
 - `configs/windows_smoke_short_aug.yaml`, `configs/windows_smoke_short_aug_mid.yaml`, `configs/windows_smoke_short_aug_strong.yaml`, and `configs/windows_smoke_short_reg_aug_repro.yaml` for the augmentation-first smoke matrix
 - `configs/windows_smoke_dann.yaml` for local DANN smoke validation
 - `configs/linux_non_dann_accuracy.yaml`, `configs/linux_non_dann_balanced.yaml`, and `configs/linux_non_dann.yaml` for the non-DANN matrix
 - `configs/linux_non_dann_mixed_accuracy.yaml` for the mixed-environment sequence-split non-DANN diagnostic track
 - `configs/linux_non_dann_short_accuracy.yaml`, `configs/linux_non_dann_short_reg_accuracy.yaml`, and `configs/linux_non_dann_short_reg_aug_accuracy.yaml` for the first non-DANN early-overfit mitigation matrix
-- `configs/linux_non_dann_short_aug_accuracy.yaml`, `configs/linux_non_dann_short_aug_mid_accuracy.yaml`, `configs/linux_non_dann_short_aug_strong_accuracy.yaml`, and `configs/linux_non_dann_short_reg_aug_repro_accuracy.yaml` for the augmentation-first non-DANN matrix
-- `configs/linux_dann_accuracy.yaml`, `configs/linux_dann_balanced.yaml`, and `configs/linux_dann.yaml` for the DANN matrix
+- `configs/linux_non_dann_short_aml`, `configs/linux_dann_balanced.yaml`, and `configs/linux_dann.yaml` for the DANN matrix
 
 Keep `domain_adaptation.use_dann` disabled unless the active experiment is explicitly the DANN track.
 
@@ -69,6 +67,7 @@ Keep `domain_adaptation.use_dann` disabled unless the active experiment is expli
 
 ## Current Optimization Targets
 - **Completed**: Temporal Difference is integrated in the AoA dataset pipeline.
+- **Completed**: Cleaned up deprecated legacy models (`ConvBaseline`, `TemporalTCN`), obsolete scripts, and old Phase 1 configurations to streamline the project architecture around `ResNet1DPose`.
 - **Completed**: `ResNet1DPose` already uses the Deep MLP head (`Linear -> LayerNorm -> GELU -> Dropout -> Linear -> LayerNorm -> GELU -> Linear(34)`).
 - **Completed**: The formal pre-DANN baseline has been run on Linux (`train20260412_2206.log`) with `mean_rms + action_aux + Deep MLP head + diversity_first`.
 - **Completed**: The project is no longer primarily blocked by average-pose collapse. The active bottleneck is poor cross-environment generalization.

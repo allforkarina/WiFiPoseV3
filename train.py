@@ -4,7 +4,6 @@ import argparse
 import csv
 import math
 import random
-import time
 import sys
 import subprocess
 from datetime import datetime
@@ -19,7 +18,7 @@ import yaml
 
 from dataloader.aoa_dataset import AOASampleDataset, sample_to_env
 from dataloader.stratified_sampler import StratifiedBatchSampler
-from mymodels import ConvBaseline, MultiScaleTemporalPoseTCN, ResNet1DPose
+from mymodels import ResNet1DPose
 from utils.set_seed import set_seed
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -449,9 +448,11 @@ def build_dataloaders(
 def build_model(cfg: Dict[str, Any], device: torch.device, window_size: int | None = None, num_envs: int = 0) -> nn.Module:
 	mcfg = cfg.get("model", {})
 	model_name = mcfg.get("name", "resnet1d").lower()
+	if model_name != "resnet1d":
+		raise ValueError(f"Only resnet1d is supported, but got: {model_name}")
 	effective_window = int(window_size if window_size is not None else cfg.get("dataset", {}).get("window_size", 1))
 	common_kwargs = {
-		"input_channels": effective_window if model_name in {"conv1d_baseline", "resnet1d", "ms_tcn_pose"} else mcfg.get("input_channels", 1),
+		"input_channels": effective_window,
 		"input_length": mcfg.get("input_length", 181),
 		"hidden_dim": mcfg.get("hidden_dim", 256),
 		"num_joints": mcfg.get("output_joints", 17),
@@ -459,14 +460,7 @@ def build_model(cfg: Dict[str, Any], device: torch.device, window_size: int | No
 		"dropout": mcfg.get("dropout", 0.2),
 		"num_envs": num_envs,
 	}
-	if model_name == "conv1d_baseline":
-		model = ConvBaseline(**common_kwargs)
-	elif model_name == "resnet1d":
-		model = ResNet1DPose(**common_kwargs)
-	elif model_name == "ms_tcn_pose":
-		model = MultiScaleTemporalPoseTCN(**common_kwargs)
-	else:
-		raise ValueError(f"Unsupported model name: {model_name}")
+	model = ResNet1DPose(**common_kwargs)
 	return model.to(device)
 
 
