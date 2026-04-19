@@ -36,18 +36,30 @@ class AOASampleDataset(Dataset):
         transform=None,
         window_size: int = 1,
         normalize_mode: str = "pelvis_torso",
+        input_mode: str = "diff",
+        svd_rank: int = 1,
+        feature_centering: bool = False,
+        cache_in_memory: bool = False,
     ):
         self.aoa_root = Path(aoa_root)
         self.labels_root = Path(labels_root)
         self.transform = transform
         self.window_size = max(1, int(window_size))
         self.normalize_mode = str(normalize_mode).strip().lower() or "pelvis_torso"
+        self.input_mode = str(input_mode).strip().lower() or "diff"
+        self.svd_rank = max(1, int(svd_rank))
+        self.feature_centering = bool(feature_centering)
+        self.cache_in_memory = bool(cache_in_memory)
         if self.window_size % 2 == 0:
             self.window_size += 1
         self.window_radius = self.window_size // 2
+        supported_input_modes = {"diff", "abs", "svd_residual", "svd_residual_diff"}
+        if self.input_mode not in supported_input_modes:
+            raise ValueError(f"Unsupported input_mode: {self.input_mode}. Supported: {sorted(supported_input_modes)}")
 
         self.index: List[Tuple[str, str, int]] = []
         self._h5_map: Dict[Tuple[str, str], Path] = {}
+        self._feature_cache: Dict[Tuple[str, str], np.ndarray] = {}
 
         actions = [f"A{idx:02d}" for idx in range(1, 28)]
         samples = [f"S{idx:02d}" for idx in range(1, 41)]
@@ -65,6 +77,10 @@ class AOASampleDataset(Dataset):
                 self._h5_map[(action, sample)] = h5_path
                 for fi in range(num_frames):
                     self.index.append((action, sample, fi))
+
+        if self.cache_in_memory:
+            for action, sample in self._h5_map:
+                self.load_feature_sequence(action, sample)
 
     @staticmethod
     def _normalize_aoa(aoa: np.ndarray, global_lower: float = -25.0, global_upper: float = 0.0) -> np.ndarray:
@@ -104,29 +120,92 @@ class AOASampleDataset(Dataset):
         normalized = centered / scale
         return normalized.astype(np.float32), center.astype(np.float32), np.array([scale], dtype=np.float32)
 
+    @staticmethod
+    def _diff_sequence(sequence: np.ndarray) -> np.ndarray:
+        sequence = np.asarray(sequence, dtype=np.float32)
+        if sequence.shape[0] == 0:
+            return sequence.copy()
+        prev_sequence = np.concatenate([sequence[:1], sequence[:-1]], axis=0)
+        return (sequence - prev_sequence).astype(np.float32)
+
+    @staticmethod
+    def _compute_svd_residual(sequence: np.ndarray, rank: int) -> np.ndarray:
+        sequence = np.asarray(sequence, dtype=np.float32)
+        if sequence.ndim != 2:
+            raise ValueError(f"SVD residual expects a 2D sequence, but got shape={sequence.shape}")
+        if rank < 1:
+            raise ValueError(f"svd_rank must be >= 1, but got {rank}")
+        max_rank = min(sequence.shape)
+        if rank >= max_rank:
+            raise ValueError(
+                f"svd_rank must be < min(num_frames, num_bins). Got rank={rank}, limit={max_rank} for shape={sequence.shape}"
+            )
+        u, s, vt = np.linalg.svd(sequence, full_matrices=False)
+        static = (u[:, :rank] * s[:rank]) @ vt[:rank, :]
+        residual = sequence - static
+        return residual.astype(np.float32)
+
+    def _apply_feature_centering(self, sequence: np.ndarray) -> np.ndarray:
+        if not self.feature_centering:
+            return sequence.astype(np.float32)
+        centered = sequence - sequence.mean(axis=0, keepdims=True)
+        return centered.astype(np.float32)
+
+    def _load_normalized_sequence(self, h5_path: Path, max_frames_per_sequence: int = 0) -> np.ndarray:
+        with h5py.File(h5_path, 'r') as hf:
+            aoa_frames = np.asarray(hf['aoa_spectrum'], dtype=np.float32)
+        if max_frames_per_sequence > 0:
+            aoa_frames = aoa_frames[:max_frames_per_sequence]
+        return self._normalize_aoa(aoa_frames)
+
+    def _build_feature_sequence(self, normalized_sequence: np.ndarray) -> np.ndarray:
+        if self.input_mode == "abs":
+            feature_sequence = normalized_sequence.copy()
+        elif self.input_mode == "diff":
+            feature_sequence = self._diff_sequence(normalized_sequence)
+        elif self.input_mode == "svd_residual":
+            feature_sequence = self._compute_svd_residual(normalized_sequence, self.svd_rank)
+        elif self.input_mode == "svd_residual_diff":
+            residual = self._compute_svd_residual(normalized_sequence, self.svd_rank)
+            feature_sequence = self._diff_sequence(residual)
+        else:
+            raise ValueError(f"Unsupported input_mode: {self.input_mode}")
+        return self._apply_feature_centering(feature_sequence)
+
+    def load_feature_sequence(
+        self,
+        action: str,
+        sample: str,
+        max_frames_per_sequence: int = 0,
+    ) -> np.ndarray:
+        seq_key = (action, sample)
+        if max_frames_per_sequence <= 0 and seq_key in self._feature_cache:
+            return self._feature_cache[seq_key]
+        if seq_key not in self._h5_map:
+            raise KeyError(f"Unknown sequence key: {seq_key}")
+        h5_path = self._h5_map[seq_key]
+        normalized_sequence = self._load_normalized_sequence(
+            h5_path,
+            max_frames_per_sequence=max_frames_per_sequence,
+        )
+        feature_sequence = self._build_feature_sequence(normalized_sequence)
+        if max_frames_per_sequence <= 0 and self.cache_in_memory:
+            self._feature_cache[seq_key] = feature_sequence
+        return feature_sequence
+
     def __len__(self):
         return len(self.index)
 
     def __getitem__(self, idx: int):
         action, sample, frame_idx = self.index[idx]
         h5_path = self._h5_map[(action, sample)]
+        feature_sequence = self.load_feature_sequence(action, sample)
+        num_frames = int(feature_sequence.shape[0])
         with h5py.File(h5_path, 'r') as hf:
-            aoa_frames = hf['aoa_spectrum']
-            num_frames = int(aoa_frames.shape[0])
             window = []
             for offset in range(-self.window_radius, self.window_radius + 1):
                 source_idx = min(max(frame_idx + offset, 0), num_frames - 1)
-                curr_frame = self._normalize_aoa(np.asarray(aoa_frames[source_idx], dtype=np.float32))
-                
-                # Phase 1 Step 1.1: Temporal Difference (Dynamic Filtering)
-                # We calculate difference between current frame and previous frame to
-                # completely zero out static walls and furniture reflections, keeping 
-                # only dynamic human movements. The first frame differences against itself (zeros).
-                prev_idx = max(source_idx - 1, 0)
-                prev_frame = self._normalize_aoa(np.asarray(aoa_frames[prev_idx], dtype=np.float32))
-                diff_frame = curr_frame - prev_frame
-                
-                window.append(diff_frame)
+                window.append(feature_sequence[source_idx])
             aoa = np.stack(window, axis=0)
             # try label_files in h5 if present
             label_path = None
@@ -172,6 +251,9 @@ class AOASampleDataset(Dataset):
             'sample': sample,
             'frame_idx': frame_idx,
             'window_size': self.window_size,
+            'input_mode': self.input_mode,
+            'svd_rank': self.svd_rank,
+            'feature_centering': self.feature_centering,
             'aoa_h5': str(h5_path),
             'label_path': str(label_path),
             'pose_center': pose_center,

@@ -12,6 +12,8 @@ TRACK_VARIANT_TO_CONFIG = {
     ("non_dann", "baseline"): "configs/linux_non_dann_accuracy.yaml",
     ("non_dann", "accuracy"): "configs/linux_non_dann_accuracy.yaml",
     ("non_dann", "mixed"): "configs/linux_non_dann_mixed_accuracy.yaml",
+    ("non_dann", "svd"): "configs/linux_non_dann_svd_accuracy.yaml",
+    ("non_dann", "mixed_svd"): "configs/linux_non_dann_mixed_svd_accuracy.yaml",
     ("non_dann", "balanced"): "configs/linux_non_dann_balanced.yaml",
     ("non_dann", "diversity"): "configs/linux_non_dann.yaml",
     ("non_dann", "short"): "configs/linux_non_dann_short_accuracy.yaml",

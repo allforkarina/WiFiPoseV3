@@ -141,6 +141,16 @@ def resolve_normalize_mode(cfg: Dict[str, Any]) -> str:
 	return str(loss_cfg.get("normalize_mode", "pelvis_torso")).strip().lower() or "pelvis_torso"
 
 
+def resolve_dataset_feature_config(cfg: Dict[str, Any]) -> dict[str, Any]:
+	dataset_cfg = cfg.get("dataset", {})
+	return {
+		"input_mode": str(dataset_cfg.get("input_mode", "diff")).strip().lower() or "diff",
+		"svd_rank": max(1, int(dataset_cfg.get("svd_rank", 1))),
+		"feature_centering": bool(dataset_cfg.get("feature_centering", False)),
+		"cache_in_memory": bool(dataset_cfg.get("cache_in_memory", False)),
+	}
+
+
 def compute_checkpoint_selection_score(
 	val_nmpjpe: float,
 	val_std_ratio: float,
@@ -380,11 +390,16 @@ def build_dataloaders(
 	labels_root: Path,
 	window_size: int,
 ) -> tuple[DataLoader, DataLoader, DataLoader, dict[str, Any]]:
+	feature_cfg = resolve_dataset_feature_config(cfg)
 	ds = AOASampleDataset(
 		aoa_root=aoa_root,
 		labels_root=labels_root,
 		window_size=window_size,
 		normalize_mode=resolve_normalize_mode(cfg),
+		input_mode=feature_cfg["input_mode"],
+		svd_rank=feature_cfg["svd_rank"],
+		feature_centering=feature_cfg["feature_centering"],
+		cache_in_memory=feature_cfg["cache_in_memory"],
 	)
 	if len(ds) == 0:
 		raise RuntimeError(f"Dataset is empty. aoa_root={aoa_root} labels_root={labels_root}")
@@ -439,6 +454,10 @@ def build_dataloaders(
 		"test_sequences": count_unique_sequences(ds, test_indices),
 		"batch_size": batch_size,
 		"window_size": window_size,
+		"input_mode": feature_cfg["input_mode"],
+		"svd_rank": feature_cfg["svd_rank"],
+		"feature_centering": feature_cfg["feature_centering"],
+		"cache_in_memory": feature_cfg["cache_in_memory"],
 		"train_envs": train_envs_seen,
 		"train_augmentation": train_transform is not None,
 	}
@@ -849,6 +868,11 @@ def main() -> None:
 		always=True,
 	)
 	logger.log(f"[data] train={split_stats['train_size']} val={split_stats['val_size']} test={split_stats['test_size']}", always=True)
+	logger.log(
+		f"[feature] input_mode={split_stats['input_mode']} svd_rank={split_stats['svd_rank']} "
+		f"feature_centering={split_stats['feature_centering']} cache_in_memory={split_stats['cache_in_memory']}",
+		always=True,
+	)
 	logger.log(f"[aug] train_runtime_enable={split_stats['train_augmentation']}", always=True)
 
 	# --- Env mapping ---
